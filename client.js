@@ -180,6 +180,9 @@ window.__ModuleLoader__.load({
       autoFadeHint: '鼠标离开浮层后自动变淡，移回或聚焦时恢复；关闭则一直保持上面的透明度。',
       resetPosition: '重置位置',
       resetPositionDone: '浮层位置已重置到右下角。',
+      overlaySettings: '牌桌设置',
+      overlaySettingsHint: '更多设置见 设置 → 牌桌联机。',
+      done: '完成',
       hideOverlay: '隐藏浮层',
       showOverlay: '显示浮层',
       overlayHiddenHint: '牌桌浮层已隐藏，按 Ctrl+Shift+H 或点「显示浮层」恢复。',
@@ -1856,6 +1859,8 @@ window.__ModuleLoader__.load({
       const dragState = useRef(null)
       const saveTimer = useRef(null)
       const [selectedCards, setSelectedCards] = useState([])
+      const [showSettings, setShowSettings] = useState(false)
+      const settingsTimer = useRef(null)
 
       // The local Dou Dizhu selection is invalidated whenever the board, the
       // turn or my hand changes (a play landed, the round moved on, re-deal).
@@ -1888,6 +1893,7 @@ window.__ModuleLoader__.load({
         const active = dragState.current
         if (active !== null && typeof active.detach === 'function') active.detach()
         if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
+        if (settingsTimer.current !== null) window.clearTimeout(settingsTimer.current)
       }, [])
 
       const table = tableRecord
@@ -1982,6 +1988,44 @@ window.__ModuleLoader__.load({
         if (result.ok === true) showNotice(successText === undefined ? '' : successText, false)
         else showNotice(errorText(result.error, game) || zh.actionFailed, true)
         return result.ok === true
+      }
+
+      /** Overlay-embedded display settings: same config as the 大厅, applied live. */
+      const applyOverlayConfig = async (patch, okText) => {
+        const result = await store.configure(patch)
+        if (result.ok === true) {
+          showNotice(okText === undefined ? '' : okText, false)
+          return true
+        }
+        showNotice(errorText(result.error, game) || zh.saveFailed, true)
+        return false
+      }
+
+      /** Slider: preview instantly, persist once the drag pauses. */
+      const previewOverlayOpacity = (percent) => {
+        const next = Math.min(1, Math.max(MIN_OPACITY, Number(percent) / 100))
+        opacityStore.set(next)
+        if (settingsTimer.current !== null) window.clearTimeout(settingsTimer.current)
+        settingsTimer.current = window.setTimeout(() => {
+          settingsTimer.current = null
+          void store.configure({ overlayOpacity: next }).then((result) => {
+            opacityStore.set(null)
+            if (result.ok !== true) showNotice(errorText(result.error, game) || zh.saveFailed, true)
+          })
+        }, 300)
+      }
+
+      const changeOverlaySize = (next) => {
+        const size = typeof next === 'string' && OVERLAY_WIDTHS[next] !== undefined ? next : DEFAULT_SIZE
+        void applyOverlayConfig({ overlaySize: size })
+      }
+
+      const changeOverlayAutoFade = (checked) => {
+        void applyOverlayConfig({ autoFade: checked === true })
+      }
+
+      const resetOverlayPosition = () => {
+        void applyOverlayConfig({ overlayX: null, overlayY: null }, zh.resetPositionDone)
       }
 
       /** Card-game writes (PROTOCOL §7.3/§7.6): bid / play / pass / start. */
@@ -2200,6 +2244,15 @@ window.__ModuleLoader__.load({
             : null,
           h('div', { key: 'tools', className: 'dsh-card-lan-head-tools' }, [
             h('button', {
+              key: 'settings',
+              type: 'button',
+              className: 'dsh-card-lan-icon-button' + (showSettings ? ' is-active' : ''),
+              title: zh.overlaySettings,
+              'aria-label': zh.overlaySettings,
+              'aria-expanded': showSettings,
+              onClick: () => setShowSettings((value) => !value),
+            }, '⚙'),
+            h('button', {
               key: 'min',
               type: 'button',
               className: 'dsh-card-lan-icon-button',
@@ -2229,6 +2282,69 @@ window.__ModuleLoader__.load({
           h('span', { key: 'count', className: 'dsh-card-lan-muted dsh-card-lan-small' }, fmt(zh.playersN, { n: players.length })),
         ]),
       ])
+
+      const settingsPanel = showSettings
+        ? h('div', {
+          key: 'settings',
+          className: 'dsh-card-lan-overlay-settings',
+          role: 'group',
+          'aria-label': zh.overlaySettings,
+        }, [
+          h('div', { key: 'opacity', className: 'dsh-card-lan-settings-row' }, [
+            h('span', { key: 'label', className: 'dsh-card-lan-label' }, zh.opacity),
+            h('input', {
+              key: 'range',
+              type: 'range',
+              className: 'dsh-card-lan-settings-range',
+              min: String(Math.round(MIN_OPACITY * 100)),
+              max: '100',
+              step: '5',
+              value: String(Math.round(baseOpacity * 100)),
+              'aria-label': zh.opacity,
+              onChange: (event) => previewOverlayOpacity(Number(event.target.value)),
+            }),
+            h('span', { key: 'value', className: 'dsh-card-lan-settings-value' },
+              fmt(zh.opacityValue, { n: Math.round(baseOpacity * 100) })),
+          ]),
+          h('div', { key: 'size', className: 'dsh-card-lan-settings-row' }, [
+            h('span', { key: 'label', className: 'dsh-card-lan-label' }, zh.sizeLabel),
+            h('select', {
+              key: 'select',
+              className: 'dsh-card-lan-settings-select',
+              value: overlaySizeOf(configRecord),
+              'aria-label': zh.sizeLabel,
+              onChange: (event) => changeOverlaySize(String(event.target.value)),
+            }, ['small', 'medium', 'large'].map((value) => h('option', {
+              key: value,
+              value,
+            }, value === 'small' ? zh.sizeSmall : (value === 'medium' ? zh.sizeMedium : zh.sizeLarge)))),
+          ]),
+          h('label', { key: 'fade', className: 'dsh-card-lan-check dsh-card-lan-settings-check' }, [
+            h('input', {
+              key: 'input',
+              type: 'checkbox',
+              checked: autoFade,
+              onChange: (event) => changeOverlayAutoFade(event.target.checked === true),
+            }),
+            h('span', { key: 'text' }, zh.autoFadeLabel),
+          ]),
+          h('div', { key: 'actions', className: 'dsh-card-lan-settings-actions' }, [
+            h('button', {
+              key: 'reset',
+              type: 'button',
+              className: 'dsh-card-lan-button dsh-card-lan-button-small',
+              onClick: resetOverlayPosition,
+            }, zh.resetPosition),
+            h('button', {
+              key: 'done',
+              type: 'button',
+              className: 'dsh-card-lan-button dsh-card-lan-button-small dsh-card-lan-button-primary',
+              onClick: () => setShowSettings(false),
+            }, zh.done),
+          ]),
+          h('p', { key: 'hint', className: 'dsh-card-lan-settings-hint' }, zh.overlaySettingsHint),
+        ])
+        : null
 
       // One connection banner, highest priority first: retrying > failed > stale.
       const connectionBanner = reconnecting
@@ -2356,6 +2472,7 @@ window.__ModuleLoader__.load({
         onBlur: onFocusOut,
       }, [
         head,
+        settingsPanel,
         connectionBanner,
         h('div', { key: 'body', className: 'dsh-card-lan-body' }, bodyChildren),
         noticeNode,
@@ -2408,6 +2525,19 @@ window.__ModuleLoader__.load({
       'background:var(--dsw-alias-bg-layer-2,rgba(30,41,59,.7));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.35));',
       'color:var(--dsw-alias-label-secondary,#94a3b8)}',
       '.dsh-card-lan-icon-button:hover{border-color:var(--dsw-alias-border-l2,rgba(148,163,184,.7))}',
+      '.dsh-card-lan-icon-button.is-active{border-color:var(--dsw-alias-brand-primary,#4d6bfe);color:var(--dsw-alias-label-primary,#e2e8f0)}',
+      '.dsh-card-lan-overlay-settings{position:absolute;top:52px;right:12px;z-index:8;width:236px;box-sizing:border-box;',
+      'display:flex;flex-direction:column;gap:9px;padding:12px;border-radius:12px;pointer-events:auto;',
+      'background:var(--dsw-alias-bg-overlay,rgba(15,23,42,.96));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.35));',
+      'box-shadow:0 12px 32px rgba(2,6,23,.5)}',
+      '.dsh-card-lan-settings-row{display:flex;align-items:center;gap:8px}',
+      '.dsh-card-lan-settings-range{flex:1 1 auto;min-width:0;accent-color:var(--dsw-alias-brand-primary,#4d6bfe)}',
+      '.dsh-card-lan-settings-value{flex:0 0 auto;min-width:34px;text-align:right;color:var(--dsw-alias-label-secondary,#94a3b8);font-variant-numeric:tabular-nums}',
+      '.dsh-card-lan-settings-select{flex:1 1 auto;min-width:0;padding:5px 8px;border-radius:8px;font:inherit;font-size:12px;',
+      'background:var(--dsw-alias-bg-layer-2,rgba(30,41,59,.7));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.35));color:var(--dsw-alias-label-primary,#e2e8f0)}',
+      '.dsh-card-lan-settings-check{font-size:12px;gap:6px}',
+      '.dsh-card-lan-settings-actions{display:flex;justify-content:flex-end;gap:8px}',
+      '.dsh-card-lan-settings-hint{margin:0;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary,#94a3b8)}',
       '.dsh-card-lan-status{display:flex;flex-direction:column;gap:6px;padding:12px 14px;border-radius:10px;',
       'background:var(--dsw-alias-bg-layer-1,rgba(15,23,42,.4));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.25))}',
       '.dsh-card-lan-status-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
