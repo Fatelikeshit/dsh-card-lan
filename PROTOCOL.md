@@ -463,7 +463,8 @@ window.__ModuleLoader__.load({
 
 ### 7.8 人机补位（v6）
 
-- `config.botCount`：整数 `0..2`，默认 `0`（不补），表示**最多补几个机器人**（实际补位 = `min(botCount, minPlayers - 已入座真人数)`）；`view.config` 暴露，另派生 `view.config.fillBots = botCount > 0` 兼容旧客户端。`POST /api/card-lan/config` 接受 `{botCount:0|1|2}`，非整数/越界 → `invalid-botcount`；兼容接受旧字段 `{fillBots:boolean}`（true→2 / false→0）与非法值 → `invalid-fillbots`。
+- `config.botCount`：整数 `0..2`，默认 `0`（不补），表示**最多补几个机器人**（`autoFillBots=false` 时实际补位 = `min(botCount, minPlayers - 已入座真人数)`）；`view.config` 暴露，另派生 `view.config.fillBots = botCount > 0` 兼容旧客户端。`POST /api/card-lan/config` 接受 `{botCount:0|1|2}`，非整数/越界 → `invalid-botcount`；兼容接受旧字段 `{fillBots:boolean}`（true→2 / false→0）与非法值 → `invalid-fillbots`。
+- `config.autoFillBots`：布尔，**自动补齐**开关（默认 `false`；迁移规则：旧配置缺省且 `botCount===2` → `true`，旧 `fillBots:true` → botCount 2 且 `true`）。开启时忽略 `botCount`，直接补到 `minPlayers`（需要多少补多少，即「人数不足就补满」）；关闭时按 `botCount` 上限补。`view.config` 暴露；`POST` 非布尔 → `invalid-autofillbots`。
 - 作用范围：`game` 为 `doudizhu` / `paodekuai` 的牌局。房主开启补位（`botCount > 0`）后：**开桌即按已入座真人补足 `min(botCount, 3 - 真人数)` 个机器人**（未开局时桌上就显示）；`idle/result` 阶段后加入的真人会**顶掉一个机器人**，不会因机器人占座被 `full` 拒绝；`playing/bidding/dealer` 阶段仍拒绝入座。机器人 node 形如 `bot-1`/`bot-2`，昵称「机器人·小A」「机器人·小B」，`players[].bot=true`（其余字段同普通玩家；手牌仍按查看者隐私，非本人不可见）。
 - 机器人只存在于房主牌局内：不广播 hello、不参与发现/TTL 清理、不接受网络 action；房主关闭补位（`botCount=0`，且处于 idle/result）或 `关闭牌桌` 时清除机器人；`开始下一局` 时按当前真人数与 `botCount` 重新补空位。
 - 人数不足：真人 + 机器人 < `minPlayers` 时开局，引擎返回 `no-players`，UI 映射为「人数不足：斗地主/跑得快需要 3 人」。

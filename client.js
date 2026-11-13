@@ -135,6 +135,7 @@ window.__ModuleLoader__.load({
       'no-target': '没有可重连的房主信息，请重新加入牌桌。',
       'invalid-turn-timeout': '回合超时必须是 0–300 的整数秒。',
       'invalid-botcount': '机器人数量不合法：只能是 0、1 或 2。',
+      'invalid-autofillbots': '自动补齐开关不合法：需要布尔值。',
       'invalid-fillbots': '人机补位开关必须是一个布尔值。',
       'bad-cards': '牌型不合法，或者压不过上家；换一手再试。',
       'must-play': '轮到你领出，必须出牌，不能不要。',
@@ -173,7 +174,9 @@ window.__ModuleLoader__.load({
       botCountNone: '不补',
       botCountOne: '1 个',
       botCountTwo: '2 个',
-      botCountHint: '最多补几个机器人（斗地主/跑得快需要 3 人）；后加入的真人会顶掉机器人；21 点不受影响。',
+      autoFillBots: '自动补齐',
+      autoFillBotsHint: '人数不足时自动补满 3 人',
+      botCountHint: '自动补齐：人数不足时自动补满 3 人；关闭后按「机器人数量」补位（最多 2 个）；后加入的真人会顶掉机器人；21 点不受影响。',
       noPlayersCard: '人数不足：斗地主/跑得快需要 3 人',
       botTag: '🤖 机器人',
       turnTimeout: '回合超时（秒）',
@@ -1109,6 +1112,7 @@ window.__ModuleLoader__.load({
       const [sizeDraft, setSizeDraft] = useState(null)
       const [autoFadeDraft, setAutoFadeDraft] = useState(null)
       const [botCountDraft, setBotCountDraft] = useState(null)
+      const [autoFillDraft, setAutoFillDraft] = useState(null)
       const [gameDraft, setGameDraft] = useState(null)
       const opacityTimer = useRef(null)
       const seeded = useRef(false)
@@ -1152,10 +1156,14 @@ window.__ModuleLoader__.load({
         : (Number.isInteger(previewConfig.botCount)
           ? Math.min(MAX_BOT_COUNT, Math.max(0, previewConfig.botCount))
           : (previewConfig.fillBots === true ? MAX_BOT_COUNT : 0))
+      // Auto-fill (PROTOCOL §7.8): when on, the host ignores botCount and fills
+      // the table to minPlayers, so the count select becomes read-only.
+      const configAutoFillBots = previewConfig !== null ? previewConfig.autoFillBots === true : false
       const effectiveOpacity = opacityDraft !== null ? opacityDraft : configOpacity
       const effectiveSize = sizeDraft !== null ? sizeDraft : configSize
       const effectiveAutoFade = autoFadeDraft !== null ? autoFadeDraft : configAutoFade
       const effectiveBotCount = botCountDraft !== null ? botCountDraft : configBotCount
+      const effectiveAutoFillBots = autoFillDraft !== null ? autoFillDraft : configAutoFillBots
       // Game picker for the next 创建牌桌 (PROTOCOL §7.1): defaults to the
       // host's persisted config.game, not saved with the rest of the form.
       const configGame = gameOf(previewConfig !== null ? previewConfig.game : DEFAULT_GAME)
@@ -1176,6 +1184,10 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         setBotCountDraft(null)
       }, [configBotCount])
+
+      useEffect(() => {
+        setAutoFillDraft(null)
+      }, [configAutoFillBots])
 
       useEffect(() => {
         setGameDraft(null)
@@ -1278,6 +1290,17 @@ window.__ModuleLoader__.load({
           // Failure: drop the optimistic draft so the select snaps back to the
           // host value; the notice from applyDisplay explains why.
           if (!saved) setBotCountDraft(null)
+        })
+      }
+
+      /** Auto-fill toggle (PROTOCOL §7.8): when on, the host fills to 3 seats. */
+      const changeAutoFillBots = (checked) => {
+        const value = checked === true
+        setAutoFillDraft(value)
+        void applyDisplay({ autoFillBots: value }).then((saved) => {
+          // Failure: drop the optimistic draft so the checkbox snaps back to
+          // the host value; the notice from applyDisplay explains why.
+          if (!saved) setAutoFillDraft(null)
         })
       }
 
@@ -1480,6 +1503,20 @@ window.__ModuleLoader__.load({
             h('span', { key: 'label' }, zh.spectatorEnabled),
           ]),
           h('span', { key: 'spectatorHint', className: 'dsh-card-lan-muted dsh-card-lan-small' }, zh.spectatorEnabledHint),
+          h('div', { key: 'autoFillBots', className: 'dsh-card-lan-field' }, [
+            h('label', { key: 'check', className: 'dsh-card-lan-check' }, [
+              h('input', {
+                key: 'input',
+                type: 'checkbox',
+                'aria-label': zh.autoFillBots,
+                checked: effectiveAutoFillBots,
+                disabled: busy,
+                onChange: (event) => changeAutoFillBots(event.target.checked),
+              }),
+              h('span', { key: 'label' }, zh.autoFillBots),
+            ]),
+            h('span', { key: 'hint', className: 'dsh-card-lan-muted dsh-card-lan-small' }, zh.autoFillBotsHint),
+          ]),
           h('label', { key: 'botCount', className: 'dsh-card-lan-field' }, [
             h('span', { key: 'label', className: 'dsh-card-lan-label' }, zh.botCount),
             h('select', {
@@ -1487,7 +1524,8 @@ window.__ModuleLoader__.load({
               className: 'dsh-card-lan-input dsh-card-lan-input-narrow',
               'aria-label': zh.botCount,
               value: String(effectiveBotCount),
-              disabled: busy,
+              // Auto-fill ignores botCount host-side, so the count is read-only.
+              disabled: busy || effectiveAutoFillBots,
               onChange: (event) => changeBotCount(Number(event.target.value)),
             }, [
               h('option', { key: '0', value: '0' }, zh.botCountNone),
