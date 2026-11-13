@@ -325,9 +325,9 @@ window.__ModuleLoader__.load({
 
 ### 7.1 配置与开桌
 
-- `config.game`：`"blackjack" | "doudizhu" | "paodekuai" | "guandan" | "zhajinhua"`，默认 `"blackjack"`，表示下次「创建牌桌」的玩法（持久化）。
+- `config.game`：`"blackjack" | "doudizhu" | "paodekuai" | "guandan" | "zhajinhua" | "texas"`，默认 `"blackjack"`，表示下次「创建牌桌」的玩法（持久化）。
 - `view.config.game` 暴露。
-- `action { "type":"open", "game"?: "blackjack"|"doudizhu"|"paodekuai"|"guandan"|"zhajinhua" }`：带 `game` 时先写回 `config.game` 再开桌；非法 → `{ok:false,error:"invalid-game"}`。不带则用 `config.game`。
+- `action { "type":"open", "game"?: "blackjack"|"doudizhu"|"paodekuai"|"guandan"|"zhajinhua"|"texas" }`：带 `game` 时先写回 `config.game` 再开桌；非法 → `{ok:false,error:"invalid-game"}`。不带则用 `config.game`。
 - `hello.table` 增加 `game` 字段，发现列表按玩法显示（21 点 / 斗地主）。
 - `view.table.game` 必填（两种玩法都带）；21 点的 table 结构不变。
 
@@ -544,6 +544,30 @@ window.__ModuleLoader__.load({
 - 我的区域：3 张牌（未看牌显示背面，`看牌` 后翻开）、筹码/本局投入、按钮 `看牌`（未看）/`跟注 {amount}`/`加注`/`弃牌`（只剩 2 人时）`比牌`；
 - 结算：「你赢了 +{pot}」/「你输了」，显示所有人手牌；房主「开始下一局」；
 - 观战者不显示任何人的暗牌（result 时可见全部），无操作按钮。
+
+### 7.16 德州扑克（v9.0）
+
+2–6 人、1 副 52 张；每人 2 张底牌 + 5 张公共牌；无机器人补位。
+
+- **筹码**：起始 1000；小盲 10、大盲 20；每局开始筹码 < 20 自动补到 1000；局间筹码延续。
+- **按钮/盲注**：按钮（dealer）首局座位 0，之后每局按座位 +1。2 人时按钮=小盲、对家=大盲；3+ 人时按钮下一位小盲、再下一位大盲。翻前由大盲后一位先行动（2 人时为按钮/小盲）。
+- **下注轮**：preflop → flop(3 张) → turn(1) → river(1)。每街从 dealer 下一位（翻前大盲后一位）按座位轮转行动，只由未弃牌且未 all-in 的玩家行动；已 all-in 不再行动。
+- **动作**：`fold` / `check`（本街投入已等于 currentBet 时合法）/ `call`（补到 currentBet；筹码不足自动 all-in）/ `raise`（加注到 `currentBet + 20`；currentBet=0 时即下注 20；筹码不足自动 all-in；不设自由加注额）。
+- **街推进**：所有 active 玩家本街投入相等（或已 all-in）→ 发下一街，`currentBet=0`；只剩 1 人未弃牌 → 立即结算。
+- **摊牌**：按每人本局 `committed` 总额构建边池（不同 committed 值分层）；每层池由「未弃牌且 committed ≥ 该层」的玩家争夺，7 选 5 最大者赢该池，平局均分（余数给座位靠前者）。牌型：同花顺 > 四条 > 葫芦 > 同花 > 顺子 > 三条 > 两对 > 一对 > 高牌；A 可作 1 组成 A2345。
+- **超时**：能 check 则自动 check，否则 fold。
+- 错误码：`not-your-turn`、`bad-phase`、`bad-action`、`bad-raise`（不满足最小加注/无筹码）。
+- `view.table`：`game/role/hostNode/phase(idle|preflop|flop|turn|river|result)/round/dealer/turn/pot/currentBet/community/myCards/players(node,nick,self,chips,bet,committed,status(active|folded|allin),result,lastAction)/log/scores/staleMs/turnRemainingMs`；`result` 时带 `board`、`winnerNodes`、`pots`（各池金额与赢家）、`players[].cards`。
+
+### 7.17 德州扑克 UI（v9.0）
+
+- 大厅玩法选择增加「德州扑克」；发现列表显示标签。
+- 牌桌：顶部「德州扑克 · 第 N 局」/阶段（翻前/翻牌/转牌/河牌/本局结束）、底池、当前注、盲注 10/20、回合倒计时；
+- 玩家行：昵称、筹码、本街投入、按钮「D/SB/BB」标记、状态（行动中/弃牌/全下）、当前回合高亮；
+- 中间：5 张公共牌（未发显示空位），已发出的翻开；
+- 我的区域：2 张底牌（自己始终可见）、筹码/本局投入、动作按钮 `弃牌`/`过牌`/`跟注 {N}`/`加注到 {N}`（筹码不足时 `全下 {N}`）；
+- 结算：「你赢了 +{N}」/「你输了」，展示公共牌与赢家手牌；房主「开始下一局」；
+- 观战：看不到任何人底牌（result 时才公开），无操作按钮。
 
 ## 8. 验收补充（v4）
 

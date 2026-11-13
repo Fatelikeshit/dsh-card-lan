@@ -88,8 +88,9 @@ window.__ModuleLoader__.load({
       paodekuai: '跑得快',
       guandan: '掼蛋',
       zhajinhua: '炸金花',
+      texas: '德州扑克',
     }
-    const GAME_ORDER = ['blackjack', 'doudizhu', 'paodekuai', 'guandan', 'zhajinhua']
+    const GAME_ORDER = ['blackjack', 'doudizhu', 'paodekuai', 'guandan', 'zhajinhua', 'texas']
     const DEFAULT_GAME = 'blackjack'
 
     /** Dou Dizhu phases (PROTOCOL §7.3): idle is the pre-deal table state. */
@@ -112,6 +113,19 @@ window.__ModuleLoader__.load({
 
     /** Zhajinhua caps the number of raises per round (PROTOCOL §7.14). */
     const ZJH_MAX_RAISES = 5
+
+    /** Texas Hold'em phases and fixed blind/raise sizing (PROTOCOL §7.16). */
+    const TX_PHASES = {
+      idle: '等待开始',
+      preflop: '翻前',
+      flop: '翻牌',
+      turn: '转牌',
+      river: '河牌',
+      result: '本局结束',
+    }
+    const TX_SMALL_BLIND = 10
+    const TX_BIG_BLIND = 20
+    const TX_RAISE_STEP = 20
 
     /** Dou Dizhu rank order: 3 < 4 < … < 2 < 小王 < 大王. */
     const DDZ_RANK_ORDER = {
@@ -162,6 +176,7 @@ window.__ModuleLoader__.load({
       'no-chips': '筹码不足，跟不了这一注。',
       'compare-unavailable': '现在不能比牌：场上还有不止 2 个人没弃牌。',
       'raise-cap': '本局加注次数已用完（最多 5 次）。',
+      'bad-raise': '加注额不合法：不满足最低加注或筹码不足。',
       'must-play': '轮到你领出，必须出牌，不能不要。',
       'bad-phase': '现在不是这个阶段，做不了这个操作。',
       'invalid-game': '不认识的玩法，只支持 21 点和斗地主。',
@@ -427,6 +442,41 @@ window.__ModuleLoader__.load({
       zjhHandsTitle: '所有人手牌',
       zjhUnseen: '未亮牌',
       noPlayersZjh: '人数不足：炸金花需要 2 人',
+      txTitle: '德州扑克 · 第 {n} 局',
+      txTitleIdle: '德州扑克 · 未开局',
+      txCapsule: '德州扑克 · 第 {n} 局',
+      txCapsuleIdle: '德州扑克 · 未开局',
+      txPot: '底池 {n}',
+      txCurrentBet: '当前注 {n}',
+      txBlinds: '盲注 {sb}/{bb}',
+      txChips: '筹码 {n}',
+      txStreetBet: '本街 {n}',
+      txCommitted: '本局 {n}',
+      txDealerMark: 'D',
+      txSbMark: 'SB',
+      txBbMark: 'BB',
+      txStatusActive: '行动中',
+      txStatusFolded: '弃牌',
+      txStatusAllin: '全下',
+      txCommunity: '公共牌',
+      txMyCards: '我的底牌',
+      txFold: '弃牌',
+      txCheck: '过牌',
+      txCall: '跟注 {n}',
+      txAllin: '全下 {n}',
+      txRaiseTo: '加注到 {n}',
+      txWin: '你赢了 +{n}',
+      txLose: '你输了',
+      txWinner: '赢家：{name}',
+      txRoundOver: '本局结束',
+      txWinTag: '赢',
+      txWinnersTitle: '赢家手牌',
+      txPotsTitle: '底池分配',
+      txPotLine: '池 {amount}：{names}',
+      txWait: '等待 {name} 行动…',
+      txYourTurn: '轮到你行动',
+      txEmptySlot: '空位',
+      noPlayersTexas: '人数不足：德州扑克需要 2 人',
     }
 
     /** Tiny `{name}` interpolator for the copy above. */
@@ -603,7 +653,7 @@ window.__ModuleLoader__.load({
     /** Normalize an untrusted game id (PROTOCOL §7.1/§7.7). */
     function gameOf(value) {
       return value === 'doudizhu' || value === 'paodekuai' || value === 'guandan'
-        || value === 'zhajinhua'
+        || value === 'zhajinhua' || value === 'texas'
         ? value
         : DEFAULT_GAME
     }
@@ -624,7 +674,9 @@ window.__ModuleLoader__.load({
         ? DDZ_PHASES
         : (game === 'paodekuai'
           ? PDK_PHASES
-          : (game === 'guandan' ? GD_PHASES : (game === 'zhajinhua' ? ZJH_PHASES : PHASES)))
+          : (game === 'guandan'
+            ? GD_PHASES
+            : (game === 'zhajinhua' ? ZJH_PHASES : (game === 'texas' ? TX_PHASES : PHASES))))
       return labels[phase] !== undefined ? labels[phase] : phase
     }
 
@@ -634,6 +686,7 @@ window.__ModuleLoader__.load({
       if (game === 'paodekuai') return round > 0 ? fmt(zh.pkTitle, { n: round }) : zh.pkTitleIdle
       if (game === 'guandan') return round > 0 ? fmt(zh.gdTitle, { n: round }) : zh.gdTitleIdle
       if (game === 'zhajinhua') return round > 0 ? fmt(zh.zjhTitle, { n: round }) : zh.zjhTitleIdle
+      if (game === 'texas') return round > 0 ? fmt(zh.txTitle, { n: round }) : zh.txTitleIdle
       return round > 0 ? fmt(zh.tableTitle, { n: round }) : zh.tableTitleIdle
     }
 
@@ -643,6 +696,7 @@ window.__ModuleLoader__.load({
       if (game === 'paodekuai') return round > 0 ? fmt(zh.pkCapsule, { n: round }) : zh.pkCapsuleIdle
       if (game === 'guandan') return round > 0 ? fmt(zh.gdCapsule, { n: round }) : zh.gdCapsuleIdle
       if (game === 'zhajinhua') return round > 0 ? fmt(zh.zjhCapsule, { n: round }) : zh.zjhCapsuleIdle
+      if (game === 'texas') return round > 0 ? fmt(zh.txCapsule, { n: round }) : zh.txCapsuleIdle
       return round > 0 ? fmt(zh.capsule, { n: round }) : zh.capsuleIdle
     }
 
@@ -752,6 +806,7 @@ window.__ModuleLoader__.load({
       if (trimmed === 'no-players') {
         if (game === 'guandan') return zh.noPlayersGuandan
         if (game === 'zhajinhua') return zh.noPlayersZjh
+        if (game === 'texas') return zh.noPlayersTexas
         if (isCardGameId(game)) return zh.noPlayersCard
       }
       return ERROR_TEXT[trimmed] !== undefined ? ERROR_TEXT[trimmed] : fmt(zh.actionFailedWith, { reason: trimmed })
@@ -1588,6 +1643,294 @@ window.__ModuleLoader__.load({
             disabled: busy || connectionBroken,
             onClick: () => void props.compareHand(),
           }, zh.zjhCompare))
+        }
+      }
+      if (role === 'host' && (phase === 'idle' || phase === 'result')) {
+        actionNodes.push(h('button', {
+          key: 'start',
+          type: 'button',
+          className: 'dsh-card-lan-button dsh-card-lan-button-primary',
+          disabled: busy || connectionBroken,
+          onClick: () => void props.startRound(),
+        }, phase === 'result' ? zh.ddzNextRound : zh.ddzStart))
+      }
+
+      return { headExtras, hint, bodyNodes, actionNodes }
+    }
+
+    /**
+     * Texas Hold'em table body (PROTOCOL §7.16/§7.17): 2–6 seats, 2 hole cards,
+     * 5 community cards and fixed-size betting (blinds 10/20, raise +20).
+     * Pure renderer like the other table bodies; writes go through callbacks.
+     */
+    function buildTexasContent(props) {
+      const role = props.role
+      const isSpectator = props.isSpectator === true
+      const phase = props.phase
+      const players = props.players
+      const me = props.me
+      const myNode = asString(props.myNode, '')
+      const turnNode = asString(props.turnNode, '')
+      const turnNick = asString(props.turnNick, '')
+      const myCards = asArray(props.myCards).filter((card) => typeof card === 'string' && card !== '')
+      const community = asArray(props.community).filter((card) => typeof card === 'string' && card !== '')
+      const pot = Math.max(0, asNumber(props.pot, 0))
+      const currentBet = Math.max(0, asNumber(props.currentBet, 0))
+      const dealerNode = asString(props.dealerNode, '')
+      const busy = props.busy === true
+      const connectionBroken = props.connectionBroken === true
+      const turnRemainingMs = asNumber(props.turnRemainingMs, -1)
+      const winnerNodes = asArray(props.winnerNodes).map((node) => asString(node, '')).filter((node) => node !== '')
+      const pots = asArray(props.pots).filter((entry) => asObject(entry) !== null)
+      const activeTurn = !isSpectator && myNode !== '' && turnNode === myNode
+      const meStatus = me !== undefined ? asString(me.status, 'active') : 'active'
+      const meChips = me !== undefined ? Math.max(0, asNumber(me.chips, 0)) : 0
+      const meStreetBet = me !== undefined ? Math.max(0, asNumber(me.bet, 0)) : 0
+      const myCommitted = me !== undefined ? Math.max(0, asNumber(me.committed, 0)) : 0
+      const myTurn = activeTurn && me !== undefined && meStatus !== 'folded' && meStatus !== 'allin'
+        && phase !== 'idle' && phase !== 'result'
+      const callGap = Math.max(0, currentBet - meStreetBet)
+      const canCheck = callGap === 0
+      const raiseTo = currentBet + TX_RAISE_STEP
+      const raiseGap = Math.max(0, raiseTo - meStreetBet)
+      // Seat order (the players array is wire order) decides the D/SB/BB marks.
+      const dealerIndex = dealerNode === '' ? -1 : players.findIndex((slot) => asString(slot.node, '') === dealerNode)
+      const seatCount = players.length
+      let sbNode = ''
+      let bbNode = ''
+      if (dealerIndex >= 0 && seatCount >= 2) {
+        const sbIndex = seatCount === 2 ? dealerIndex : (dealerIndex + 1) % seatCount
+        const bbIndex = seatCount === 2 ? (dealerIndex + 1) % seatCount : (dealerIndex + 2) % seatCount
+        sbNode = asString(players[sbIndex] !== undefined ? players[sbIndex].node : '', '')
+        bbNode = asString(players[bbIndex] !== undefined ? players[bbIndex].node : '', '')
+      }
+
+      /* ---------- header extras: game pill, pot, current bet, blinds ---------- */
+      const headExtras = [
+        h('span', { key: 'game', className: 'dsh-card-lan-pill is-game-texas' }, GAME_LABELS.texas),
+        h('span', { key: 'pot', className: 'dsh-card-lan-tag is-pot' }, fmt(zh.txPot, { n: pot })),
+        h('span', { key: 'bet', className: 'dsh-card-lan-tag' }, fmt(zh.txCurrentBet, { n: currentBet })),
+        h('span', { key: 'blinds', className: 'dsh-card-lan-tag' },
+          fmt(zh.txBlinds, { sb: TX_SMALL_BLIND, bb: TX_BIG_BLIND })),
+      ]
+      if (phase !== 'idle' && phase !== 'result' && turnRemainingMs >= 0) {
+        headExtras.push(h('span', { key: 'countdown', className: 'dsh-card-lan-tag is-turn' },
+          fmt(zh.ddzCountdown, { n: Math.max(0, Math.ceil(turnRemainingMs / 1000)) })))
+      }
+
+      /* ---------- hint line ---------- */
+      let hint = ''
+      if (isSpectator) {
+        hint = zh.spectatorHint
+      } else if (phase === 'idle') {
+        hint = role === 'host' ? zh.ddzIdleHost : zh.ddzWaitStart
+      } else if (phase === 'result') {
+        hint = role === 'host' ? zh.ddzResultHost : zh.ddzWaitNext
+      } else if (myTurn) {
+        hint = zh.txYourTurn
+      } else {
+        hint = turnNick !== '' ? fmt(zh.txWait, { name: turnNick }) : zh.ddzWaitHostState
+      }
+
+      const bodyNodes = []
+
+      /* ---------- other seats: chips / street bet / D-SB-BB / status ---------- */
+      const others = players.filter((slot) => slot !== me)
+      for (const slot of others) {
+        const node = asString(slot.node, '')
+        const nick = asString(slot.nick, '玩家')
+        const chips = Math.max(0, asNumber(slot.chips, 0))
+        const bet = Math.max(0, asNumber(slot.bet, 0))
+        const status = asString(slot.status, 'active')
+        const isTurn = phase !== 'idle' && phase !== 'result' && node !== '' && node === turnNode
+        const won = phase === 'result' && winnerNodes.indexOf(node) !== -1
+        const classes = ['dsh-card-lan-row', 'dsh-card-lan-tx-seat']
+        if (isTurn) classes.push('is-turn')
+        if (status === 'folded') classes.push('is-out')
+        if (won) classes.push('is-winner')
+        const tags = [
+          h('span', { key: 'chips', className: 'dsh-card-lan-tag' }, fmt(zh.txChips, { n: chips })),
+          h('span', { key: 'bet', className: 'dsh-card-lan-tag' }, fmt(zh.txStreetBet, { n: bet })),
+        ]
+        if (node !== '' && node === dealerNode) {
+          tags.push(h('span', { key: 'dealer', className: 'dsh-card-lan-tag is-tx-d', title: 'dealer' }, zh.txDealerMark))
+        }
+        if (node !== '' && node === sbNode) {
+          tags.push(h('span', { key: 'sb', className: 'dsh-card-lan-tag is-tx-sb' }, zh.txSbMark))
+        }
+        if (node !== '' && node === bbNode) {
+          tags.push(h('span', { key: 'bb', className: 'dsh-card-lan-tag is-tx-bb' }, zh.txBbMark))
+        }
+        if (status === 'folded') {
+          tags.push(h('span', { key: 'status', className: 'dsh-card-lan-tag' }, zh.txStatusFolded))
+        } else if (status === 'allin') {
+          tags.push(h('span', { key: 'status', className: 'dsh-card-lan-tag is-tx-allin' }, zh.txStatusAllin))
+        } else {
+          tags.push(h('span', { key: 'status', className: 'dsh-card-lan-tag' + (isTurn ? ' is-turn' : '') },
+            zh.txStatusActive))
+        }
+        if (won) {
+          tags.push(h('span', { key: 'win', className: 'dsh-card-lan-tag is-result-win' }, zh.txWinTag))
+        }
+        bodyNodes.push(h('div', { key: 'seat:' + node + ':' + nick, className: classes.join(' ') }, [
+          h('span', { key: 'nick', className: 'dsh-card-lan-name' }, nick),
+          ...tags,
+        ]))
+      }
+
+      /* ---------- community: exactly 5 slots, empty until dealt ---------- */
+      const communityNodes = []
+      for (let index = 0; index < 5; index += 1) {
+        const card = community[index]
+        if (typeof card === 'string' && card !== '') {
+          communityNodes.push(h(CardChip, { key: 'cc:' + index, card }))
+        } else {
+          communityNodes.push(h('span', { key: 'cc:' + index, className: 'dsh-card-lan-tx-slot' }, zh.txEmptySlot))
+        }
+      }
+      bodyNodes.push(h('div', { key: 'community', className: 'dsh-card-lan-tx-community' }, [
+        h('div', { key: 'title', className: 'dsh-card-lan-label' }, zh.txCommunity),
+        h('div', { key: 'cards', className: 'dsh-card-lan-hand dsh-card-lan-tx-board' }, communityNodes),
+      ]))
+
+      /* ---------- my area: 2 hole cards (always visible to me) ---------- */
+      if (!isSpectator) {
+        const holeNodes = []
+        for (let index = 0; index < 2; index += 1) {
+          const card = myCards[index]
+          if (typeof card === 'string' && card !== '') {
+            holeNodes.push(h(CardChip, { key: 'hole:' + index, card }))
+          } else {
+            holeNodes.push(h(CardChip, { key: 'hole:' + index, hidden: true }))
+          }
+        }
+        bodyNodes.push(h('div', { key: 'mySeat', className: 'dsh-card-lan-tx-me' }, [
+          h('div', { key: 'head', className: 'dsh-card-lan-row-head' }, [
+            h('span', { key: 'label', className: 'dsh-card-lan-label' }, zh.txMyCards),
+            h('span', { key: 'chips', className: 'dsh-card-lan-tag' }, fmt(zh.txChips, { n: meChips })),
+            h('span', { key: 'bet', className: 'dsh-card-lan-tag' }, fmt(zh.txStreetBet, { n: meStreetBet })),
+            h('span', { key: 'committed', className: 'dsh-card-lan-tag' }, fmt(zh.txCommitted, { n: myCommitted })),
+            myTurn ? h('span', { key: 'turn', className: 'dsh-card-lan-tag is-turn' }, zh.txYourTurn) : null,
+          ]),
+          h('div', { key: 'cards', className: 'dsh-card-lan-hand dsh-card-lan-tx-hole' }, holeNodes),
+        ]))
+      }
+
+      /* ---------- result: banner + pots + winner hole cards ---------- */
+      if (phase === 'result') {
+        const winners = players.filter((slot) => winnerNodes.indexOf(asString(slot.node, '')) !== -1)
+        const winnerNicks = winners.map((slot) => asString(slot.nick, '玩家'))
+        let myWin = 0
+        for (const entry of pots) {
+          const amount = Math.max(0, asNumber(entry.amount, asNumber(entry.value, 0)))
+          const entryWinners = asArray(entry.winners).map((value) => asString(value, ''))
+          const singleWinner = asString(entry.winnerNode, '')
+          if (myNode !== '' && (entryWinners.indexOf(myNode) !== -1 || singleWinner === myNode)) {
+            myWin += amount
+          }
+        }
+        if (myWin === 0 && winnerNodes.indexOf(myNode) !== -1) myWin = pot
+        let bannerText = zh.txRoundOver
+        let bannerClass = 'dsh-card-lan-banner is-none'
+        if (isSpectator) {
+          bannerText = winnerNicks.length > 0 ? fmt(zh.txWinner, { name: winnerNicks.join('、') }) : zh.txRoundOver
+        } else if (myNode !== '' && winnerNodes.indexOf(myNode) !== -1) {
+          bannerText = fmt(zh.txWin, { n: myWin })
+          bannerClass = 'dsh-card-lan-banner is-win'
+        } else if (winnerNodes.length > 0) {
+          bannerText = zh.txLose
+          bannerClass = 'dsh-card-lan-banner is-lose'
+        }
+        bodyNodes.push(h('div', { key: 'result', className: bannerClass, role: 'status' }, bannerText))
+
+        if (pots.length > 0) {
+          const potLines = pots.map((entry, index) => {
+            const amount = Math.max(0, asNumber(entry.amount, asNumber(entry.value, 0)))
+            const entryWinners = asArray(entry.winners).map((value) => asString(value, ''))
+            const names = entryWinners.map((winnerNode) => {
+              const player = players.find((slot) => asString(slot.node, '') === winnerNode)
+              return player !== undefined ? asString(player.nick, '玩家') : '玩家'
+            })
+            return h('div', { key: 'pot:' + index, className: 'dsh-card-lan-tx-potline' },
+              fmt(zh.txPotLine, { amount, names: names.length > 0 ? names.join('、') : '—' }))
+          })
+          bodyNodes.push(h('div', { key: 'pots', className: 'dsh-card-lan-tx-pots' }, [
+            h('div', { key: 'title', className: 'dsh-card-lan-label' }, zh.txPotsTitle),
+            ...potLines,
+          ]))
+        }
+
+        if (winners.length > 0) {
+          const winnerLines = winners.map((slot, index) => {
+            const cards = asArray(slot.cards).filter((card) => typeof card === 'string' && card !== '')
+            const cardNodes = cards.length > 0
+              ? cards.map((card, cardIndex) => h(CardChip, { key: 'wc:' + cardIndex, card }))
+              : [h('span', { key: 'empty', className: 'dsh-card-lan-empty' }, zh.zjhUnseen)]
+            return h('div', { key: 'winner:' + index, className: 'dsh-card-lan-tx-winner' }, [
+              h('span', { key: 'nick', className: 'dsh-card-lan-name' }, asString(slot.nick, '玩家')),
+              h('span', { key: 'cards', className: 'dsh-card-lan-hand' }, cardNodes),
+            ])
+          })
+          bodyNodes.push(h('div', { key: 'winners', className: 'dsh-card-lan-tx-winners' }, [
+            h('div', { key: 'title', className: 'dsh-card-lan-label' }, zh.txWinnersTitle),
+            ...winnerLines,
+          ]))
+        }
+      }
+
+      /* ---------- actions: fold / check-or-call / raise ---------- */
+      const actionNodes = []
+      if (myTurn) {
+        actionNodes.push(h('button', {
+          key: 'fold',
+          type: 'button',
+          className: 'dsh-card-lan-button',
+          disabled: busy || connectionBroken,
+          onClick: () => void props.foldHand(),
+        }, zh.txFold))
+        if (meChips > 0) {
+          if (canCheck) {
+            actionNodes.push(h('button', {
+              key: 'check',
+              type: 'button',
+              className: 'dsh-card-lan-button dsh-card-lan-button-primary',
+              disabled: busy || connectionBroken,
+              onClick: () => void props.checkBet(),
+            }, zh.txCheck))
+          } else if (callGap >= meChips) {
+            actionNodes.push(h('button', {
+              key: 'allin',
+              type: 'button',
+              className: 'dsh-card-lan-button dsh-card-lan-button-primary',
+              disabled: busy || connectionBroken,
+              onClick: () => void props.callBet(),
+            }, fmt(zh.txAllin, { n: meChips })))
+          } else {
+            actionNodes.push(h('button', {
+              key: 'call',
+              type: 'button',
+              className: 'dsh-card-lan-button dsh-card-lan-button-primary',
+              disabled: busy || connectionBroken,
+              onClick: () => void props.callBet(),
+            }, fmt(zh.txCall, { n: callGap })))
+          }
+          if (raiseGap >= meChips) {
+            actionNodes.push(h('button', {
+              key: 'raise',
+              type: 'button',
+              className: 'dsh-card-lan-button',
+              disabled: busy || connectionBroken,
+              onClick: () => void props.raiseBet(),
+            }, fmt(zh.txAllin, { n: meChips })))
+          } else {
+            actionNodes.push(h('button', {
+              key: 'raise',
+              type: 'button',
+              className: 'dsh-card-lan-button',
+              disabled: busy || connectionBroken,
+              onClick: () => void props.raiseBet(),
+            }, fmt(zh.txRaiseTo, { n: raiseTo })))
+          }
         }
       }
       if (role === 'host' && (phase === 'idle' || phase === 'result')) {
@@ -2727,6 +3070,7 @@ window.__ModuleLoader__.load({
       const isPdk = game === 'paodekuai'
       const isGuandan = game === 'guandan'
       const isZjh = game === 'zhajinhua'
+      const isTexas = game === 'texas'
       const isCardGame = isCardGameId(game)
       const phase = asString(table.phase, 'idle')
       const round = Math.max(0, asNumber(table.round, 0))
@@ -2872,6 +3216,8 @@ window.__ModuleLoader__.load({
       const raiseBet = () => act({ type: 'raise' })
       const foldHand = () => act({ type: 'fold' })
       const compareHand = () => act({ type: 'compare' })
+      /** Texas Hold'em writes (PROTOCOL §7.16): check also exists. */
+      const checkBet = () => act({ type: 'check' })
 
       /** Card-game writes (PROTOCOL §7.3/§7.6/§7.12): bid / play / pass / start. */
       const toggleCard = (index) => {
@@ -3058,11 +3404,46 @@ window.__ModuleLoader__.load({
         })
         : null
 
+      // Texas Hold'em view fields (PROTOCOL §7.16); ignored by the other games.
+      const txCommunityRaw = isTexas ? asArray(table.community) : []
+      const txCommunity = isTexas
+        ? (txCommunityRaw.length > 0 ? txCommunityRaw : asArray(table.board))
+        : []
+      const texasGame = isTexas
+        ? buildTexasContent({
+          role,
+          isSpectator,
+          phase,
+          players,
+          me,
+          myNode,
+          turnNode,
+          turnNick,
+          myCards: asArray(table.myCards).filter((card) => typeof card === 'string' && card !== ''),
+          community: txCommunity,
+          pot: Math.max(0, asNumber(table.pot, 0)),
+          currentBet: Math.max(0, asNumber(table.currentBet, 0)),
+          dealerNode: asString(table.dealer, ''),
+          winnerNodes: asArray(table.winnerNodes),
+          pots: asArray(table.pots),
+          busy,
+          connectionBroken,
+          turnRemainingMs,
+          foldHand,
+          checkBet,
+          callBet,
+          raiseBet,
+          startRound,
+        })
+        : null
+
       let hint = ''
       if (isCardGame) {
         hint = cardGame.hint
       } else if (bettingGame !== null) {
         hint = bettingGame.hint
+      } else if (texasGame !== null) {
+        hint = texasGame.hint
       } else if (isSpectator) {
         hint = zh.spectatorHint
       } else if (phase === 'playing') {
@@ -3132,7 +3513,11 @@ window.__ModuleLoader__.load({
             className: 'dsh-card-lan-title',
           }, gameTitleOf(game, round)),
           h('span', { key: 'phase', className: 'dsh-card-lan-pill is-' + phase }, phaseLabel),
-          ...(isCardGame ? cardGame.headExtras : (bettingGame !== null ? bettingGame.headExtras : [])),
+          ...(isCardGame
+            ? cardGame.headExtras
+            : (bettingGame !== null
+              ? bettingGame.headExtras
+              : (texasGame !== null ? texasGame.headExtras : []))),
           isSpectator
             ? h('span', { key: 'spectator', className: 'dsh-card-lan-pill is-spectator' }, zh.spectatorBadge)
             : null,
@@ -3337,6 +3722,8 @@ window.__ModuleLoader__.load({
         for (const node of cardGame.bodyNodes) bodyChildren.push(node)
       } else if (bettingGame !== null) {
         for (const node of bettingGame.bodyNodes) bodyChildren.push(node)
+      } else if (texasGame !== null) {
+        for (const node of texasGame.bodyNodes) bodyChildren.push(node)
       } else {
         bodyChildren.push(dealerBlock)
         for (const row of rows) bodyChildren.push(row)
@@ -3344,7 +3731,9 @@ window.__ModuleLoader__.load({
       }
       const finalActions = isCardGame
         ? cardGame.actionNodes
-        : (bettingGame !== null ? bettingGame.actionNodes : bjActionNodes)
+        : (bettingGame !== null
+          ? bettingGame.actionNodes
+          : (texasGame !== null ? texasGame.actionNodes : bjActionNodes))
       if (finalActions.length > 0) {
         bodyChildren.push(h('div', { key: 'actions', className: 'dsh-card-lan-actions' }, finalActions))
       }
@@ -3537,6 +3926,28 @@ window.__ModuleLoader__.load({
       '.dsh-card-lan-zjh-handline.is-out{opacity:.55}',
       '.dsh-card-lan-zjh-handline.is-winner{color:#4ade80}',
       '.dsh-card-lan-zjh-handnick{min-width:56px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.dsh-card-lan-tag.is-game-texas{background:rgba(52,211,153,.14);border-color:rgba(52,211,153,.4);color:#34d399}',
+      '.dsh-card-lan-pill.is-game-texas{background:rgba(52,211,153,.14);border-color:rgba(52,211,153,.45);color:#34d399}',
+      '.dsh-card-lan-tag.is-tx-d{background:rgba(250,204,21,.18);color:#facc15;font-weight:700}',
+      '.dsh-card-lan-tag.is-tx-sb{background:rgba(56,189,248,.16);color:#7dd3fc;font-weight:600}',
+      '.dsh-card-lan-tag.is-tx-bb{background:rgba(251,146,60,.16);color:#fb923c;font-weight:600}',
+      '.dsh-card-lan-tag.is-tx-allin{background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.4);color:#f87171;font-weight:600}',
+      '.dsh-card-lan-tx-seat.is-turn{border-color:var(--dsw-alias-brand-primary,#4d6bfe)}',
+      '.dsh-card-lan-tx-community{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border-radius:10px;',
+      'background:var(--dsw-alias-bg-layer-1,rgba(15,23,42,.45));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.2))}',
+      '.dsh-card-lan-tx-board{gap:6px;min-height:44px}',
+      '.dsh-card-lan-tx-slot{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;',
+      'min-width:29px;height:40px;padding:0 4px;border-radius:6px;border:1px dashed var(--dsw-alias-border-l1,rgba(148,163,184,.35));',
+      'font-size:9px;color:var(--dsw-alias-label-secondary,#94a3b8);background:rgba(148,163,184,.06)}',
+      '.dsh-card-lan-tx-me{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border-radius:10px;',
+      'background:var(--dsw-alias-bg-layer-2,rgba(30,41,59,.55));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.25))}',
+      '.dsh-card-lan-tx-hole{gap:8px;min-height:44px}',
+      '.dsh-card-lan-tx-pots{display:flex;flex-direction:column;gap:2px;padding:6px 10px;border-radius:8px;',
+      'background:var(--dsw-alias-bg-layer-1,rgba(15,23,42,.35));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.2))}',
+      '.dsh-card-lan-tx-potline{font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary,#94a3b8)}',
+      '.dsh-card-lan-tx-winners{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border-radius:8px;',
+      'background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.3)}',
+      '.dsh-card-lan-tx-winner{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;color:#6ee7b7}',
       '.dsh-card-lan-row-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
       '.dsh-card-lan-name{font-weight:600;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dsh-card-lan-hand{display:flex;align-items:center;gap:5px;flex-wrap:wrap;min-height:40px}',
