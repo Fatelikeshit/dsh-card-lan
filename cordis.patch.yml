@@ -1,0 +1,6 @@
+# dsh-card-lan bundle patch: one row that mounts both halves.
+#   - Host half: LAN discovery (UDP broadcast) + room/table service + /api/card-lan routes.
+#   - Browser half: lobby settings page + the card table overlay.
+- insert:
+    - id: dsh-card-lan
+      name: 'dsh-card-lan'

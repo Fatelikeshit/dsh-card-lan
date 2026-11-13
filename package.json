@@ -1,0 +1,52 @@
+{
+  "name": "dsh-card-lan",
+  "version": "0.2.0",
+  "private": true,
+  "description": "局域网 21 点牌桌：UDP 房间发现 + 房主权威牌局，仿 dsh-pet-lan 的联机模型。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client.js"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/engine.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    },
+    "engines": {
+      "dsh": ">=0.2.1-rc.2"
+    }
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/",
+    "check": "node --check lib/index.js && node --check lib/engine.js && node --check client.js"
+  },
+  "license": "MIT",
+  "author": "Fatelikeshit",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Fatelikeshit/dsh-card-lan.git"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "lan",
+    "blackjack",
+    "multiplayer"
+  ]
+}
