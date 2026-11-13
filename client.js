@@ -131,6 +131,7 @@ window.__ModuleLoader__.load({
       'reconnect-failed': '与房主的连接已断开，重连失败；可以点「重新连接」再试一次。',
       'no-target': '没有可重连的房主信息，请重新加入牌桌。',
       'invalid-turn-timeout': '回合超时必须是 0–300 的整数秒。',
+      'invalid-fillbots': '人机补位开关必须是一个布尔值。',
       'bad-cards': '牌型不合法，或者压不过上家；换一手再试。',
       'must-play': '轮到你领出，必须出牌，不能不要。',
       'bad-phase': '现在不是这个阶段，做不了这个操作。',
@@ -164,6 +165,9 @@ window.__ModuleLoader__.load({
       passwordRequired: '开启房间密码时必须填写密码（1–16 个字符）。',
       spectatorEnabled: '允许观战',
       spectatorEnabledHint: '开启后别人可以不占座位、只看牌局。',
+      fillBots: '人机补位（斗地主/跑得快）',
+      fillBotsHint: '房主开始本局时用机器人补满 3 个座位；21 点不受影响。',
+      botTag: '🤖 机器人',
       turnTimeout: '回合超时（秒）',
       turnTimeoutHint: '0–300 秒，0 表示关闭；超时房主会自动替当前玩家停牌。默认 45。',
       turnTimeoutInvalid: '回合超时必须是 0–300 的整数秒。',
@@ -874,6 +878,11 @@ window.__ModuleLoader__.load({
         if (isTurn) classes.push('is-turn')
         if (status === 'out') classes.push('is-out')
         const tags = []
+        // Machine seats are labelled next to the nickname (PROTOCOL §7.9);
+        // their hand stays hidden behind the usual remaining-card counter.
+        if (slot.bot === true) {
+          tags.push(h('span', { key: 'bot', className: 'dsh-card-lan-bot-tag', title: zh.botTag }, zh.botTag))
+        }
         // Before the landlord is decided every seat has role null; showing a
         // random 农民 tag there would be a lie.
         if (rawSeatRole === 'landlord' || rawSeatRole === 'farmer') {
@@ -1089,6 +1098,7 @@ window.__ModuleLoader__.load({
       const [opacityDraft, setOpacityDraft] = useState(null)
       const [sizeDraft, setSizeDraft] = useState(null)
       const [autoFadeDraft, setAutoFadeDraft] = useState(null)
+      const [fillBotsDraft, setFillBotsDraft] = useState(null)
       const [gameDraft, setGameDraft] = useState(null)
       const opacityTimer = useRef(null)
       const seeded = useRef(false)
@@ -1125,9 +1135,11 @@ window.__ModuleLoader__.load({
         : DEFAULT_OPACITY
       const configSize = overlaySizeOf(previewConfig)
       const configAutoFade = previewConfig !== null ? previewConfig.autoFade !== false : true
+      const configFillBots = previewConfig !== null ? previewConfig.fillBots === true : false
       const effectiveOpacity = opacityDraft !== null ? opacityDraft : configOpacity
       const effectiveSize = sizeDraft !== null ? sizeDraft : configSize
       const effectiveAutoFade = autoFadeDraft !== null ? autoFadeDraft : configAutoFade
+      const effectiveFillBots = fillBotsDraft !== null ? fillBotsDraft : configFillBots
       // Game picker for the next 创建牌桌 (PROTOCOL §7.1): defaults to the
       // host's persisted config.game, not saved with the rest of the form.
       const configGame = gameOf(previewConfig !== null ? previewConfig.game : DEFAULT_GAME)
@@ -1144,6 +1156,10 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         setAutoFadeDraft(null)
       }, [configAutoFade])
+
+      useEffect(() => {
+        setFillBotsDraft(null)
+      }, [configFillBots])
 
       useEffect(() => {
         setGameDraft(null)
@@ -1232,6 +1248,15 @@ window.__ModuleLoader__.load({
         setAutoFadeDraft(value)
         void applyDisplay({ autoFade: value }).then((saved) => {
           if (!saved) setAutoFadeDraft(null)
+        })
+      }
+
+      /** Bot back-fill toggle (PROTOCOL §7.8): host-only, Dou Dizhu/Paodekuai. */
+      const changeFillBots = (checked) => {
+        const value = checked === true
+        setFillBotsDraft(value)
+        void applyDisplay({ fillBots: value }).then((saved) => {
+          if (!saved) setFillBotsDraft(null)
         })
       }
 
@@ -1428,6 +1453,20 @@ window.__ModuleLoader__.load({
             h('span', { key: 'label' }, zh.spectatorEnabled),
           ]),
           h('span', { key: 'spectatorHint', className: 'dsh-card-lan-muted dsh-card-lan-small' }, zh.spectatorEnabledHint),
+          h('div', { key: 'fillBots', className: 'dsh-card-lan-field' }, [
+            h('label', { key: 'check', className: 'dsh-card-lan-check' }, [
+              h('input', {
+                key: 'input',
+                type: 'checkbox',
+                'aria-label': zh.fillBots,
+                checked: effectiveFillBots,
+                disabled: busy,
+                onChange: (event) => changeFillBots(event.target.checked),
+              }),
+              h('span', { key: 'label' }, zh.fillBots),
+            ]),
+            h('span', { key: 'hint', className: 'dsh-card-lan-muted dsh-card-lan-small' }, zh.fillBotsHint),
+          ]),
           h('label', { key: 'turnTimeout', className: 'dsh-card-lan-field' }, [
             h('span', { key: 'label', className: 'dsh-card-lan-label' }, zh.turnTimeout),
             h('input', {
@@ -2676,6 +2715,9 @@ window.__ModuleLoader__.load({
       '.dsh-card-lan-tag.is-landlord{background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.4);color:#f87171}',
       '.dsh-card-lan-tag.is-farmer{background:rgba(34,197,94,.14);border-color:rgba(34,197,94,.35);color:#4ade80}',
       '.dsh-card-lan-tag.is-bid{background:rgba(245,158,11,.16);color:#fbbf24}',
+      '.dsh-card-lan-bot-tag{display:inline-flex;align-items:center;gap:3px;padding:0 6px;border-radius:999px;',
+      'font-size:10px;line-height:1.7;white-space:nowrap;background:rgba(56,189,248,.16);',
+      'border:1px solid rgba(56,189,248,.4);color:#7dd3fc}',
       '.dsh-card-lan-row.is-out{opacity:.55}',
       '.dsh-card-lan-ddz-play{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 10px;border-radius:8px;',
       'background:var(--dsw-alias-bg-layer-1,rgba(15,23,42,.4));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.25))}',

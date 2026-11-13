@@ -461,9 +461,27 @@ window.__ModuleLoader__.load({
 - 21 点 UI 保留原样；`view.table.game` 缺省按 `"blackjack"` 处理。
 - 样式与类名沿用 `dsh-card-lan-` 前缀，牌面仍是文字渲染。
 
+### 7.8 人机补位（v6）
+
+- `config.fillBots`：布尔，默认 `false`，`view.config` 暴露；`POST /api/card-lan/config` 接受 `{fillBots:boolean}`，非布尔 → `invalid-fillbots`。
+- 作用范围：`game` 为 `doudizhu` / `paodekuai` 的牌局。房主点「开始本局」时若 `fillBots=true`，用机器人把空位补到该玩法 `minPlayers`（3）：机器人 node 形如 `bot-1`/`bot-2`，昵称「机器人·小A」「机器人·小B」，`players[].bot=true`（其余字段同普通玩家；手牌仍按查看者隐私，非本人不可见）。
+- 机器人只存在于房主牌局内：不广播 hello、不参与发现/TTL 清理、不接受网络 action；`关闭牌桌` 时清除，`开始下一局` 时按需重新补齐（只补空位）。
+- 机器人行动：轮到机器人后 600–1000ms 自动动作（宿主驱动，引擎提供决策）：
+  - 斗地主：`bidding` 按手牌强度 `bid true/false`（保证不会连续三人不叫导致无限重发）；`playing` 领出最小合法牌，跟牌优先最小能压过的同型牌、必要时炸弹，压不过 `pass`；
+  - 跑得快：领出最小单张；跟牌出「能压过的最小合法牌」并遵守 must-play，压不过才 `pass`；
+  - 机器人不占用人类回合的超时计时（`turnTimeout` 只作用于人类）。
+- `view.table.players[].bot`：布尔，缺省 `false`，供 UI 标注。
+- 21 点忽略 `fillBots`。
+
+### 7.9 人机 UI
+
+- 大厅在「观战/密码」附近加 checkbox「人机补位（斗地主/跑得快）」，默认取 `view.config.fillBots`，改动 PATCH 配置。
+- 牌桌里 `bot === true` 的玩家昵称旁显示「🤖 机器人」标记；其手牌仍只显示剩余张数，不显示牌面；其余交互不变。
+
 ## 8. 验收补充（v4）
 
 - `node --check` 两个半边通过。
 - `node --test test/` 全绿：既有 21 点/密码/观战/超时/重连用例不回归；新增斗地主引擎单测（牌型识别与比较、叫地主流程、出牌/过牌、结算、超时动作、地主离开）。
 - 集成测试覆盖：`open {game:"doudizhu"}` 后 `view.table.game` 正确、3 人入座、叫地主→出牌→结算全流程（可用引擎直调或双实例）。
 - 不新增依赖、不装插件、不重启 DSH。
+- v6 人机补位：`config.fillBots` 缺省 false、非法值 `invalid-fillbots`；`true` 时斗地主/跑得快开局补到 3 人（`bot-1/bot-2`、`players[].bot`），机器人自动叫地主/出牌直到 result，关桌清理，21 点忽略；引擎 `botAction` 单测各跑完整局。
