@@ -1,6 +1,6 @@
 {
   "name": "dsh-card-lan",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "private": true,
   "description": "局域网牌桌：21 点 / 斗地主 / 跑得快，UDP 房间发现 + 房主权威牌局，支持密码/观战/掉线重连。",
   "icon": "icon.svg",

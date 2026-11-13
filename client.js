@@ -149,6 +149,9 @@ window.__ModuleLoader__.load({
     /** All user-visible copy; this plugin ships Chinese only. */
     const zh = {
       nav: '牌桌联机',
+      tabRoom: '房间',
+      tabSettings: '设置',
+      tabsLabel: '牌桌联机页签',
       loading: '正在读取联机状态…',
       unavailable: '联机状态不可用',
       readFailedReason: '读取状态失败：{reason}',
@@ -1207,6 +1210,7 @@ window.__ModuleLoader__.load({
       const [form, setForm] = useState(null)
       const [manual, setManual] = useState({ ip: '', port: '41235', password: '' })
       const [invitePaste, setInvitePaste] = useState('')
+      const [tab, setTab] = useState('room')
       const [notice, setNotice] = useState(null)
       const [busy, setBusy] = useState(false)
       const [peerPasswords, setPeerPasswords] = useState({})
@@ -1523,7 +1527,9 @@ window.__ModuleLoader__.load({
       // seatless; otherwise the banner would lie about a healthy table.
       const hostClosed = hostClosedCode && role === null
 
-      const fields = h('div', { key: 'fields', className: 'dsh-card-lan-fields' }, [
+      // Lobby tabs (PROTOCOL §7.11): the same field nodes are grouped into the
+      // 房间/设置 panels below, so no input loses its state on a tab switch.
+      const fieldNodes = [
         h('label', { key: 'enabled', className: 'dsh-card-lan-check' }, [
           h('input', {
             key: 'input',
@@ -1812,6 +1818,22 @@ window.__ModuleLoader__.load({
             onClick: () => void store.refresh(),
           }, zh.refresh),
         ]),
+      ]
+
+      // Split the one flat field list into the two tab panels (PROTOCOL §7.11).
+      const enabledField = fieldNodes[0]
+      const roomField = fieldNodes[1]
+      const portField = fieldNodes[2]
+      const inviteBlock = fieldNodes[3]
+      const nickField = fieldNodes[4]
+      const roomSettingsBlock = fieldNodes[5]
+      const displayBlock = fieldNodes[6]
+      const saveActions = fieldNodes[7]
+
+      const networkFields = h('div', { key: 'networkFields', className: 'dsh-card-lan-fields' }, [
+        roomField,
+        portField,
+        nickField,
       ])
 
       const noticeNode = notice !== null
@@ -2093,16 +2115,39 @@ window.__ModuleLoader__.load({
           : null,
       ])
 
-      return h('div', { className: 'dsh-card-lan-section' }, [
-        head,
-        fields,
-        noticeNode,
+      const tabButton = (id, label) => h('button', {
+        key: id,
+        type: 'button',
+        role: 'tab',
+        'aria-selected': tab === id,
+        className: 'dsh-card-lan-tab' + (tab === id ? ' is-active' : ''),
+        onClick: () => setTab(id),
+      }, label)
+
+      const tabBar = h('div', {
+        key: 'tabs',
+        className: 'dsh-card-lan-tabs',
+        role: 'tablist',
+        'aria-label': zh.tabsLabel,
+      }, [
+        tabButton('room', zh.tabRoom),
+        tabButton('settings', zh.tabSettings),
+      ])
+
+      // 房间: seat/connection controls + discovery. 设置: editable config + save.
+      const roomPanel = h('div', {
+        key: 'roomPanel',
+        className: 'dsh-card-lan-tabpanel',
+        role: 'tabpanel',
+      }, [
+        h('div', { key: 'enabledBlock', className: 'dsh-card-lan-field dsh-card-lan-settings-block' }, [enabledField]),
         status,
         h('div', { key: 'table', className: 'dsh-card-lan-field' }, [
           h('span', { key: 'label', className: 'dsh-card-lan-label' }, zh.tableLabel),
           identity,
           tableActions,
         ]),
+        inviteBlock,
         h('div', { key: 'peers', className: 'dsh-card-lan-peers' }, [
           h('div', { key: 'title', className: 'dsh-card-lan-label' }, zh.foundTables),
           peerNodes.length === 0
@@ -2111,6 +2156,24 @@ window.__ModuleLoader__.load({
           ...peerNodes,
         ]),
         manualBlock,
+      ])
+
+      const settingsPanel = h('div', {
+        key: 'settingsPanel',
+        className: 'dsh-card-lan-tabpanel',
+        role: 'tabpanel',
+      }, [
+        networkFields,
+        roomSettingsBlock,
+        displayBlock,
+        saveActions,
+      ])
+
+      return h('div', { className: 'dsh-card-lan-section' }, [
+        head,
+        tabBar,
+        noticeNode,
+        tab === 'settings' ? settingsPanel : roomPanel,
       ])
     }
 
@@ -2779,6 +2842,17 @@ window.__ModuleLoader__.load({
     const CSS = [
       '.dsh-card-lan-section{display:flex;flex-direction:column;gap:16px;font-size:13px;line-height:1.6;color:var(--dsw-alias-label-primary,#e2e8f0)}',
       '.dsh-card-lan-lobby-head{display:flex;flex-direction:column;gap:6px}',
+      '.dsh-card-lan-tabs{display:flex;flex-wrap:wrap;gap:6px;',
+      'border-bottom:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.25));padding-bottom:2px}',
+      '.dsh-card-lan-tab{font:inherit;font-size:12px;line-height:1.4;padding:6px 14px;',
+      'border-radius:8px 8px 0 0;cursor:pointer;background:transparent;border:1px solid transparent;',
+      'color:var(--dsw-alias-label-secondary,#94a3b8);transition:color .15s ease,background .15s ease}',
+      '.dsh-card-lan-tab:hover{color:var(--dsw-alias-label-primary,#e2e8f0)}',
+      '.dsh-card-lan-tab.is-active{background:var(--dsw-alias-bg-layer-2,rgba(30,41,59,.7));',
+      'border-color:var(--dsw-alias-border-l1,rgba(148,163,184,.35));border-bottom-color:transparent;',
+      'color:var(--dsw-alias-label-primary,#e2e8f0);font-weight:600}',
+      '.dsh-card-lan-tab:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:1px}',
+      '.dsh-card-lan-tabpanel{display:flex;flex-direction:column;gap:16px}',
       '.dsh-card-lan-title{margin:0;font-size:16px;font-weight:650;letter-spacing:.01em;color:var(--dsw-alias-label-primary,#e2e8f0)}',
       '.dsh-card-lan-muted{margin:0;color:var(--dsw-alias-label-secondary,#94a3b8)}',
       '.dsh-card-lan-tiny{font-size:11px;line-height:1.5}',
