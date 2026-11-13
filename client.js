@@ -19,6 +19,12 @@
  * per-turn countdown hint. Guests always render their player/spectator view
  * while reconnecting; only actions are disabled until the link is back.
  *
+ * v4 adds games: the lobby picks 21 点 or 斗地主 when creating a table, and the
+ * overlay branches on `view.table.game` — blackjack keeps the v1 renderer,
+ * while Dou Dizhu gets its own seats/last-play/hand/bid-play-pass table. The
+ * shared shell (drag, size, fade, opacity, hide shortcut, reconnect banners)
+ * is identical for both.
+ *
  * @module dsh-card-lan/client
  */
 
@@ -68,6 +74,20 @@ window.__ModuleLoader__.load({
     const STATUSES = { playing: '要牌中', stand: '停牌', bust: '爆牌', blackjack: '黑杰克' }
     const RESULTS = { win: '赢', lose: '输', push: '平' }
 
+    /** Game kinds (PROTOCOL §7.1); anything unknown falls back to blackjack. */
+    const GAME_LABELS = { blackjack: '21 点', doudizhu: '斗地主' }
+    const DEFAULT_GAME = 'blackjack'
+
+    /** Dou Dizhu phases (PROTOCOL §7.3): idle is the pre-deal table state. */
+    const DDZ_PHASES = { idle: '等待开始', bidding: '叫地主中', playing: '出牌中', result: '本局结束' }
+
+    /** Dou Dizhu rank order: 3 < 4 < … < 2 < 小王 < 大王. */
+    const DDZ_RANK_ORDER = {
+      3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8, 9: 9, 10: 10,
+      J: 11, Q: 12, K: 13, A: 14, 2: 15, BJ: 16, RJ: 17,
+    }
+    const SUIT_ORDER = { S: 0, H: 1, D: 2, C: 3 }
+
     /** Host error codes (PROTOCOL §3.2/§3.3) in plain Chinese. */
     const ERROR_TEXT = {
       'udp-offline': '联机没开着，或 UDP 端口没有监听成功；先保存设置并确认端口可用。',
@@ -103,6 +123,13 @@ window.__ModuleLoader__.load({
       'reconnect-failed': '与房主的连接已断开，重连失败；可以点「重新连接」再试一次。',
       'no-target': '没有可重连的房主信息，请重新加入牌桌。',
       'invalid-turn-timeout': '回合超时必须是 0–300 的整数秒。',
+      'bad-cards': '牌型不合法，或者压不过上家；换一手再试。',
+      'must-play': '轮到你领出，必须出牌，不能不要。',
+      'bad-phase': '现在不是这个阶段，做不了这个操作。',
+      'invalid-game': '不认识的玩法，只支持 21 点和斗地主。',
+      'not-seated': '你不在牌桌上（可能已经离开）。',
+      'bad-player': '玩家状态不对，请重试。',
+      'full': '牌桌已经满了。',
     }
 
     /** All user-visible copy; this plugin ships Chinese only. */
@@ -243,6 +270,44 @@ window.__ModuleLoader__.load({
       capsuleReconnecting: '重连中',
       spectatorBadge: '观战中',
       spectatorHint: '观战中，不参与出牌',
+      gameLabel: '玩法',
+      ddzTitle: '斗地主 · 第 {n} 局',
+      ddzTitleIdle: '斗地主 · 未开局',
+      ddzCapsule: '斗地主 · 第 {n} 局',
+      ddzCapsuleIdle: '斗地主 · 未开局',
+      ddzLandlord: '地主',
+      ddzFarmer: '农民',
+      ddzLandlordMark: '地主：{name}',
+      ddzCount: '剩 {n} 张',
+      ddzNoCards: '未发牌',
+      ddzOut: '已出完',
+      ddzBid: '叫地主',
+      ddzPassBid: '不叫',
+      ddzPlay: '出牌',
+      ddzPass: '不要',
+      ddzStart: '开始本局',
+      ddzNextRound: '开始下一局',
+      ddzNewTrick: '新一墩',
+      ddzLastPlayBy: '{name} 出了',
+      ddzMustPlay: '轮到你领出（必须出牌）',
+      ddzYourBid: '轮到你叫地主',
+      ddzWaitBid: '等待 {name} 叫地主…',
+      ddzYourPlay: '轮到你出牌',
+      ddzWaitPlay: '等待 {name} 出牌…',
+      ddzIdleHost: '点「开始本局」发牌。',
+      ddzWaitStart: '等待房主开始本局…',
+      ddzResultHost: '本局结束，点「开始下一局」再来一局。',
+      ddzWaitNext: '本局结束，等房主开下一局。',
+      ddzLandlordWin: '地主胜',
+      ddzFarmerWin: '农民胜',
+      ddzRoundOver: '本局结束',
+      ddzIWin: '你赢了',
+      ddzILose: '你输了',
+      ddzMyHand: '我的手牌（{n} 张）',
+      ddzSelected: '已选 {n} 张',
+      ddzScores: '胜 {win} · 负 {lose}',
+      ddzCountdown: '剩 {n} 秒',
+      ddzWaitHostState: '等待房主的状态同步…',
     }
 
     /** Tiny `{name}` interpolator for the copy above. */
@@ -307,18 +372,59 @@ window.__ModuleLoader__.load({
      * ------------------------------------------------------------------ */
 
     /**
-     * Decode one engine card code: rank + suit, suit is the last character
-     * ('AS' → A♠, '10H' → 10♥, 'KD' → K♦, '7C' → 7♣). Unknown shapes fall
-     * back to the raw string so a bad payload can never throw.
+     * Decode one card code: rank + suit, suit is the last character
+     * ('AS' → A♠, '10H' → 10♥, 'KD' → K♦, '7C' → 7♣). Dou Dizhu jokers are
+     * the whole code ('BJ' → 小王, 'RJ' → 大王). Unknown shapes fall back to
+     * the raw string so a bad payload can never throw.
      */
     function readCard(card) {
       const raw = typeof card === 'string' ? card.trim() : ''
       if (raw.length < 2) return { text: raw === '' ? '?' : raw, red: false }
-      const suit = raw.slice(-1).toUpperCase()
-      const rank = raw.slice(0, -1).toUpperCase()
+      const upper = raw.toUpperCase()
+      if (upper === 'BJ') return { text: '小王', red: false }
+      if (upper === 'RJ') return { text: '大王', red: true }
+      const suit = upper.slice(-1)
+      const rank = upper.slice(0, -1)
       const glyph = SUIT_GLYPHS[suit]
       if (glyph === undefined || rank === '') return { text: raw, red: false }
       return { text: rank + glyph, red: RED_SUITS[suit] === true }
+    }
+
+    /** Normalize an untrusted game id (PROTOCOL §7.1). */
+    function gameOf(value) {
+      return value === 'doudizhu' ? 'doudizhu' : DEFAULT_GAME
+    }
+
+    /** Human label for one game id. */
+    function gameLabelOf(value) {
+      return GAME_LABELS[gameOf(value)]
+    }
+
+    /** Phase label for the active game. */
+    function phaseLabelFor(game, phase) {
+      const labels = game === 'doudizhu' ? DDZ_PHASES : PHASES
+      return labels[phase] !== undefined ? labels[phase] : phase
+    }
+
+    /** Rank order of one Dou Dizhu card code (unknown codes sort first). */
+    function ddzRankValue(card) {
+      const raw = typeof card === 'string' ? card.trim().toUpperCase() : ''
+      if (DDZ_RANK_ORDER[raw] !== undefined) return DDZ_RANK_ORDER[raw]
+      const rank = raw.slice(0, -1)
+      return DDZ_RANK_ORDER[rank] !== undefined ? DDZ_RANK_ORDER[rank] : 0
+    }
+
+    /** Hand order for display: by rank, then suit. */
+    function sortDdzCards(cards) {
+      return asArray(cards)
+        .filter((card) => typeof card === 'string' && card !== '')
+        .slice()
+        .sort((left, right) => {
+          const delta = ddzRankValue(left) - ddzRankValue(right)
+          if (delta !== 0) return delta
+          return asNumber(SUIT_ORDER[String(left).slice(-1).toUpperCase()], 9)
+            - asNumber(SUIT_ORDER[String(right).slice(-1).toUpperCase()], 9)
+        })
     }
 
     /**
@@ -620,6 +726,260 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'dsh-card-lan-hand' }, nodes)
     }
 
+    /** One Dou Dizhu card; when `onClick` is given the card is selectable. */
+    function ddzCardNode(card, key, selected, onClick) {
+      const face = readCard(card)
+      const props = {
+        key,
+        className: 'dsh-card-lan-card dsh-card-lan-ddz-card'
+          + (face.red ? ' is-red' : '')
+          + (selected === true ? ' is-selected' : ''),
+        title: face.text,
+        'aria-label': face.text,
+      }
+      if (onClick !== null && onClick !== undefined) {
+        props.role = 'button'
+        props.tabIndex = 0
+        props['aria-pressed'] = selected === true
+        props.onClick = () => onClick(card)
+        props.onKeyDown = (event) => {
+          if (event === null || event === undefined) return
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            onClick(card)
+          }
+        }
+      }
+      return h('span', props, face.text)
+    }
+
+    /**
+     * Dou Dizhu table body (PROTOCOL §7.3/§7.5). A pure renderer: every value
+     * comes from the polled view, every write goes back through a callback.
+     * Returns the pieces the shared overlay shell splices in.
+     */
+    function buildDoudizhuContent(props) {
+      const role = props.role
+      const isSpectator = props.isSpectator === true
+      const phase = props.phase
+      const players = props.players
+      const me = props.me
+      const turnNode = asString(props.turnNode, '')
+      const myNode = asString(props.myNode, '')
+      const myCards = props.myCards
+      const selectedCards = props.selectedCards
+      const lastPlay = props.lastPlay
+      const mustPlay = props.mustPlay === true
+      const landlordPlayer = props.landlordPlayer
+      const busy = props.busy === true
+      const connectionBroken = props.connectionBroken === true
+      const turnRemainingMs = asNumber(props.turnRemainingMs, -1)
+      const activeTurn = !isSpectator && turnNode !== '' && turnNode === myNode
+
+      const playerByNode = (node) => {
+        const target = asString(node, '')
+        for (const slot of players) {
+          if (asString(slot.node, '') === target) return slot
+        }
+        return undefined
+      }
+
+      /* ---------- header extras: game pill, landlord, countdown ---------- */
+      const headExtras = [
+        h('span', { key: 'game', className: 'dsh-card-lan-pill is-game-doudizhu' }, GAME_LABELS.doudizhu),
+      ]
+      if (landlordPlayer !== undefined) {
+        headExtras.push(h('span', { key: 'landlord', className: 'dsh-card-lan-tag is-landlord' },
+          fmt(zh.ddzLandlordMark, { name: asString(landlordPlayer.nick, zh.ddzLandlord) })))
+      }
+      if ((phase === 'bidding' || phase === 'playing') && turnRemainingMs >= 0) {
+        headExtras.push(h('span', { key: 'countdown', className: 'dsh-card-lan-tag is-turn' },
+          fmt(zh.ddzCountdown, { n: Math.max(0, Math.ceil(turnRemainingMs / 1000)) })))
+      }
+
+      /* ---------- hint line ---------- */
+      let hint = ''
+      if (isSpectator) {
+        hint = zh.spectatorHint
+      } else if (phase === 'idle') {
+        hint = role === 'host' ? zh.ddzIdleHost : zh.ddzWaitStart
+      } else if (phase === 'bidding') {
+        if (activeTurn) hint = zh.ddzYourBid
+        else hint = props.turnNick !== '' ? fmt(zh.ddzWaitBid, { name: props.turnNick }) : zh.ddzWaitHostState
+      } else if (phase === 'playing') {
+        if (activeTurn) hint = zh.ddzYourPlay
+        else hint = props.turnNick !== '' ? fmt(zh.ddzWaitPlay, { name: props.turnNick }) : zh.ddzWaitHostState
+      } else if (phase === 'result') {
+        hint = role === 'host' ? zh.ddzResultHost : zh.ddzWaitNext
+      }
+
+      const bodyNodes = []
+
+      /* ---------- other seats: role, remaining cards, turn, out ---------- */
+      const others = players.filter((slot) => slot !== me)
+      for (const slot of others) {
+        const node = asString(slot.node, '')
+        const nick = asString(slot.nick, '玩家')
+        const rawSeatRole = asString(slot.role, '')
+        const seatRole = rawSeatRole === 'landlord' ? 'landlord' : 'farmer'
+        const status = asString(slot.status, 'playing')
+        const count = Math.max(0, asNumber(slot.count, 0))
+        const isTurn = (phase === 'bidding' || phase === 'playing') && node !== '' && node === turnNode
+        const bidding = slot.bidding
+        const seatResult = asString(slot.result, '')
+        const classes = ['dsh-card-lan-row', 'dsh-card-lan-ddz-seat']
+        if (isTurn) classes.push('is-turn')
+        if (status === 'out') classes.push('is-out')
+        const tags = []
+        // Before the landlord is decided every seat has role null; showing a
+        // random 农民 tag there would be a lie.
+        if (rawSeatRole === 'landlord' || rawSeatRole === 'farmer') {
+          tags.push(h('span', {
+            key: 'role',
+            className: 'dsh-card-lan-tag is-ddz-role ' + (seatRole === 'landlord' ? 'is-landlord' : 'is-farmer'),
+          }, seatRole === 'landlord' ? zh.ddzLandlord : zh.ddzFarmer))
+        }
+        tags.push(h('span', { key: 'count', className: 'dsh-card-lan-tag' },
+          phase === 'idle'
+            ? zh.ddzNoCards
+            : (status === 'out' ? zh.ddzOut : fmt(zh.ddzCount, { n: count }))))
+        if (isTurn) tags.push(h('span', { key: 'turn', className: 'dsh-card-lan-tag is-turn' }, zh.acting))
+        if (phase === 'bidding' && bidding === true) {
+          tags.push(h('span', { key: 'bid', className: 'dsh-card-lan-tag is-bid' }, zh.ddzBid))
+        } else if (phase === 'bidding' && bidding === false) {
+          tags.push(h('span', { key: 'bid', className: 'dsh-card-lan-tag' }, zh.ddzPassBid))
+        }
+        if (seatResult === 'win') {
+          tags.push(h('span', { key: 'result', className: 'dsh-card-lan-tag is-result-win' }, RESULTS.win))
+        } else if (seatResult === 'lose') {
+          tags.push(h('span', { key: 'result', className: 'dsh-card-lan-tag is-result-lose' }, RESULTS.lose))
+        }
+        bodyNodes.push(h('div', {
+          key: 'seat:' + (node !== '' ? node : nick),
+          className: classes.join(' '),
+        }, [
+          h('div', { key: 'head', className: 'dsh-card-lan-row-head' }, [
+            h('span', { key: 'name', className: 'dsh-card-lan-name' },
+              nick + (slot.self === true ? zh.meSuffix : '')),
+            ...tags,
+          ]),
+        ]))
+      }
+
+      /* ---------- middle: last play / new trick (nothing before the deal) ---------- */
+      if (phase !== 'idle' && lastPlay !== null && lastPlay !== undefined) {
+        const lastCards = asArray(lastPlay.cards)
+        const lastPlayer = playerByNode(lastPlay.node)
+        const lastNick = lastPlayer !== undefined ? asString(lastPlayer.nick, '玩家') : '玩家'
+        const label = asString(lastPlay.label, '')
+        bodyNodes.push(h('div', { key: 'lastPlay', className: 'dsh-card-lan-ddz-play' }, [
+          h('span', { key: 'who', className: 'dsh-card-lan-ddz-who' }, fmt(zh.ddzLastPlayBy, { name: lastNick })),
+          ...lastCards.map((card, index) => h(CardChip, { key: 'lp' + index, card })),
+          label !== '' ? h('span', { key: 'label', className: 'dsh-card-lan-tag' }, label) : null,
+        ]))
+      } else if (phase !== 'idle') {
+        bodyNodes.push(h('div', { key: 'lastPlay', className: 'dsh-card-lan-ddz-play is-new' }, [
+          h('span', { key: 'text', className: 'dsh-card-lan-ddz-who' }, zh.ddzNewTrick),
+        ]))
+      }
+      if (mustPlay && activeTurn) {
+        bodyNodes.push(h('p', { key: 'mustPlay', className: 'dsh-card-lan-ddz-must' }, zh.ddzMustPlay))
+      }
+
+      /* ---------- my hand (players only; spectators never see hands) ---------- */
+      if (!isSpectator && me !== undefined && phase !== 'idle') {
+        const canSelect = phase === 'playing' && !busy && !connectionBroken
+        const handHead = [
+          h('span', { key: 'label', className: 'dsh-card-lan-label' }, fmt(zh.ddzMyHand, { n: myCards.length })),
+          selectedCards.length > 0
+            ? h('span', { key: 'sel', className: 'dsh-card-lan-tag is-turn' },
+              fmt(zh.ddzSelected, { n: selectedCards.length }))
+            : null,
+          activeTurn ? h('span', { key: 'turn', className: 'dsh-card-lan-tag is-turn' }, zh.acting) : null,
+          props.myScore !== null && props.myScore !== undefined
+            ? h('span', { key: 'score', className: 'dsh-card-lan-muted dsh-card-lan-tiny' }, fmt(zh.ddzScores, {
+              win: asNumber(props.myScore.win, 0),
+              lose: asNumber(props.myScore.lose, 0),
+            }))
+            : null,
+        ]
+        bodyNodes.push(h('div', { key: 'myHand', className: 'dsh-card-lan-ddz-hand-area' }, [
+          h('div', { key: 'head', className: 'dsh-card-lan-row-head' }, handHead),
+          myCards.length > 0
+            ? h('div', { key: 'cards', className: 'dsh-card-lan-ddz-hand' }, myCards.map((card) => ddzCardNode(
+              card,
+              'hand:' + card,
+              selectedCards.indexOf(card) !== -1,
+              canSelect ? props.toggleCard : null,
+            )))
+            : h('span', { key: 'empty', className: 'dsh-card-lan-empty' }, zh.ddzOut),
+        ]))
+      }
+
+      /* ---------- result banner: landlord/farmer side + my win/lose ---------- */
+      if (phase === 'result') {
+        const landlordWon = landlordPlayer !== undefined && asString(landlordPlayer.result, '') === 'win'
+        const sideText = landlordPlayer === undefined
+          ? zh.ddzRoundOver
+          : (landlordWon ? zh.ddzLandlordWin : zh.ddzFarmerWin)
+        const mine = me !== undefined ? asString(me.result, '') : ''
+        const mineText = mine === 'win' ? zh.ddzIWin : (mine === 'lose' ? zh.ddzILose : '')
+        bodyNodes.push(h('div', {
+          key: 'result',
+          className: 'dsh-card-lan-banner ' + (mine === 'win' ? 'is-win' : (mine === 'lose' ? 'is-lose' : 'is-none')),
+          role: 'status',
+        }, [
+          h('span', { key: 'side' }, sideText),
+          mineText !== '' ? h('span', { key: 'mine', className: 'dsh-card-lan-ddz-result-mine' }, mineText) : null,
+        ]))
+      }
+
+      /* ---------- buttons ---------- */
+      const actionNodes = []
+      if (phase === 'bidding' && activeTurn) {
+        actionNodes.push(h('button', {
+          key: 'bid',
+          type: 'button',
+          className: 'dsh-card-lan-button dsh-card-lan-button-primary',
+          disabled: busy || connectionBroken,
+          onClick: () => props.bidTurn(true),
+        }, zh.ddzBid))
+        actionNodes.push(h('button', {
+          key: 'passBid',
+          type: 'button',
+          className: 'dsh-card-lan-button',
+          disabled: busy || connectionBroken,
+          onClick: () => props.bidTurn(false),
+        }, zh.ddzPassBid))
+      } else if (phase === 'playing' && activeTurn) {
+        actionNodes.push(h('button', {
+          key: 'play',
+          type: 'button',
+          className: 'dsh-card-lan-button dsh-card-lan-button-primary',
+          disabled: busy || connectionBroken || selectedCards.length === 0,
+          onClick: () => void props.playSelected(),
+        }, zh.ddzPlay))
+        actionNodes.push(h('button', {
+          key: 'pass',
+          type: 'button',
+          className: 'dsh-card-lan-button',
+          disabled: busy || connectionBroken || mustPlay,
+          onClick: () => props.passTurn(),
+        }, zh.ddzPass))
+      }
+      if (role === 'host' && (phase === 'idle' || phase === 'result')) {
+        actionNodes.push(h('button', {
+          key: 'start',
+          type: 'button',
+          className: 'dsh-card-lan-button dsh-card-lan-button-primary',
+          disabled: busy || connectionBroken,
+          onClick: () => void props.startRound(),
+        }, phase === 'result' ? zh.ddzNextRound : zh.ddzStart))
+      }
+
+      return { headExtras, hint, bodyNodes, actionNodes }
+    }
+
     /** One seat in the table overlay: cards, total, status, result, score. */
     function PlayerRow(props) {
       const player = props.player
@@ -681,6 +1041,7 @@ window.__ModuleLoader__.load({
       const [opacityDraft, setOpacityDraft] = useState(null)
       const [sizeDraft, setSizeDraft] = useState(null)
       const [autoFadeDraft, setAutoFadeDraft] = useState(null)
+      const [gameDraft, setGameDraft] = useState(null)
       const opacityTimer = useRef(null)
       const seeded = useRef(false)
 
@@ -719,6 +1080,10 @@ window.__ModuleLoader__.load({
       const effectiveOpacity = opacityDraft !== null ? opacityDraft : configOpacity
       const effectiveSize = sizeDraft !== null ? sizeDraft : configSize
       const effectiveAutoFade = autoFadeDraft !== null ? autoFadeDraft : configAutoFade
+      // Game picker for the next 创建牌桌 (PROTOCOL §7.1): defaults to the
+      // host's persisted config.game, not saved with the rest of the form.
+      const configGame = gameOf(previewConfig !== null ? previewConfig.game : DEFAULT_GAME)
+      const effectiveGame = gameDraft !== null ? gameDraft : configGame
 
       useEffect(() => {
         setOpacityDraft(null)
@@ -731,6 +1096,10 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         setAutoFadeDraft(null)
       }, [configAutoFade])
+
+      useEffect(() => {
+        setGameDraft(null)
+      }, [configGame])
 
       useEffect(() => () => {
         if (opacityTimer.current !== null) window.clearTimeout(opacityTimer.current)
@@ -879,6 +1248,7 @@ window.__ModuleLoader__.load({
       const table = asObject(data.table)
       const tableRole = table !== null ? asString(table.role, 'player') : ''
       const role = table === null ? null : (tableRole === 'host' ? 'host' : (tableRole === 'spectator' ? 'spectator' : 'player'))
+      const tableGame = table !== null ? gameOf(table.game) : null
       const phase = table !== null ? asString(table.phase, 'idle') : ''
       const players = table !== null
         ? asArray(table.players).filter((slot) => asObject(slot) !== null)
@@ -1192,9 +1562,13 @@ window.__ModuleLoader__.load({
       const identity = h('div', { key: 'identity', className: 'dsh-card-lan-identity' }, [
         h('div', { key: 'line', className: 'dsh-card-lan-status-line' }, [
           h('span', { key: 'role', className: 'dsh-card-lan-identity-role' }, identityText),
+          role !== null && tableGame !== null
+            ? h('span', { key: 'game', className: 'dsh-card-lan-tag is-game-' + tableGame },
+              gameLabelOf(tableGame))
+            : null,
           role !== null
             ? h('span', { key: 'phase', className: 'dsh-card-lan-tag is-' + phase },
-              PHASES[phase] !== undefined ? PHASES[phase] : phase)
+              phaseLabelFor(tableGame, phase))
             : null,
           role !== null
             ? h('span', { key: 'count', className: 'dsh-card-lan-muted dsh-card-lan-small' },
@@ -1206,12 +1580,25 @@ window.__ModuleLoader__.load({
 
       const tableActions = h('div', { key: 'tableActions', className: 'dsh-card-lan-actions' }, [
         !hostOpen && role === null
+          ? h('select', {
+            key: 'game',
+            className: 'dsh-card-lan-input dsh-card-lan-input-narrow',
+            'aria-label': zh.gameLabel,
+            value: effectiveGame,
+            disabled: busy || !enabled,
+            onChange: (event) => setGameDraft(gameOf(event.target.value)),
+          }, [
+            h('option', { key: 'blackjack', value: 'blackjack' }, GAME_LABELS.blackjack),
+            h('option', { key: 'doudizhu', value: 'doudizhu' }, GAME_LABELS.doudizhu),
+          ])
+          : null,
+        !hostOpen && role === null
           ? h('button', {
             key: 'open',
             type: 'button',
             className: 'dsh-card-lan-button dsh-card-lan-button-primary',
             disabled: busy || !enabled,
-            onClick: () => void act({ type: 'open' }, zh.noticeOpen),
+            onClick: () => void act({ type: 'open', game: effectiveGame }, zh.noticeOpen),
           }, zh.createTable)
           : null,
         hostOpen
@@ -1230,7 +1617,9 @@ window.__ModuleLoader__.load({
             className: 'dsh-card-lan-button',
             disabled: busy,
             onClick: () => void act({ type: 'start' }, zh.noticeStart),
-          }, phase === 'result' ? zh.nextRound : zh.startRound)
+          }, phase === 'result'
+            ? (tableGame === 'doudizhu' ? zh.ddzNextRound : zh.nextRound)
+            : (tableGame === 'doudizhu' ? zh.ddzStart : zh.startRound))
           : null,
         role === 'player' || role === 'spectator'
           ? h('button', {
@@ -1273,8 +1662,8 @@ window.__ModuleLoader__.load({
           if (password !== '') body.pw = password
           void act(body, spectator ? zh.noticeJoinWatch : zh.noticeJoin)
         }
-        // Open tables always show their head count; join/watch buttons are added
-        // next to it when this node has no seat yet (PROTOCOL §5).
+        // Open tables always show their head count and game kind; join/watch
+        // buttons are added when this node has no seat yet (PROTOCOL §5/§7.5).
         const children = [
           h('div', { key: 'main', className: 'dsh-card-lan-peer-main' }, [
             h('div', { key: 'name', className: 'dsh-card-lan-peer-name' }, peerNick),
@@ -1283,6 +1672,11 @@ window.__ModuleLoader__.load({
               + (spectators > 0 ? ' · ' + fmt(zh.spectatorCount, { n: spectators }) : '')),
           ]),
         ]
+        if (open) {
+          const peerGame = gameOf(peerTable.game)
+          children.push(h('span', { key: 'game', className: 'dsh-card-lan-tag is-game-' + peerGame },
+            gameLabelOf(peerGame)))
+        }
         if (passwordRequired) {
           children.push(h('span', { key: 'passwordTag', className: 'dsh-card-lan-tag' }, zh.passwordTag))
         }
@@ -1418,6 +1812,20 @@ window.__ModuleLoader__.load({
       const [dragPos, setDragPos] = useState(null)
       const dragState = useRef(null)
       const saveTimer = useRef(null)
+      const [selectedCards, setSelectedCards] = useState([])
+
+      // The local Dou Dizhu selection is invalidated whenever the board, the
+      // turn or my hand changes (a play landed, the round moved on, re-deal).
+      const tableRecord = data !== null ? asObject(data.table) : null
+      const boardKey = tableRecord === null ? '' : [
+        asString(tableRecord.game, DEFAULT_GAME),
+        asString(tableRecord.phase, ''),
+        asString(tableRecord.turn, ''),
+        asArray(tableRecord.myCards).join(','),
+      ].join('|')
+      useEffect(() => {
+        setSelectedCards([])
+      }, [boardKey])
 
       const configRecord = data !== null ? asObject(data.config) : null
       const sizeWidth = OVERLAY_WIDTHS[overlaySizeOf(configRecord)]
@@ -1439,12 +1847,14 @@ window.__ModuleLoader__.load({
         if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
       }, [])
 
-      const table = data !== null ? asObject(data.table) : null
+      const table = tableRecord
       if (table === null || hidden) return null
 
       const tableRole = asString(table.role, 'player')
       const role = tableRole === 'host' ? 'host' : (tableRole === 'spectator' ? 'spectator' : 'player')
       const isSpectator = role === 'spectator'
+      const game = gameOf(table.game)
+      const isDdz = game === 'doudizhu'
       const phase = asString(table.phase, 'idle')
       const round = Math.max(0, asNumber(table.round, 0))
       const players = asArray(table.players).filter((slot) => asObject(slot) !== null)
@@ -1495,7 +1905,7 @@ window.__ModuleLoader__.load({
         overlayStyle.right = 'auto'
         overlayStyle.bottom = 'auto'
       }
-      const phaseLabel = PHASES[phase] !== undefined ? PHASES[phase] : phase
+      const phaseLabel = phaseLabelFor(game, phase)
       const myResult = me !== undefined ? asString(me.result, '') : ''
       const scoreMap = asObject(table.scores) !== null
         ? asObject(table.scores)
@@ -1504,6 +1914,16 @@ window.__ModuleLoader__.load({
         .map(logText)
         .filter((line) => line !== '')
         .slice(-3)
+
+      // Dou Dizhu-only view fields (PROTOCOL §7.3); ignored for blackjack.
+      const landlordNode = isDdz ? asString(table.landlord, '') : ''
+      const landlordPlayer = isDdz && landlordNode !== ''
+        ? players.find((slot) => asString(slot.node, '') === landlordNode)
+        : undefined
+      const ddzMyCards = isDdz ? sortDdzCards(asArray(table.myCards)) : []
+      const ddzLastPlay = isDdz ? asObject(table.lastPlay) : null
+      const ddzMustPlay = isDdz && table.mustPlay === true
+      const myScore = myNode !== '' && scoreMap !== null ? scoreMap[myNode] : null
 
       const showNotice = (text, isError) => {
         setNotice(text === undefined || text === null || text === '' ? null : { text, error: isError === true })
@@ -1518,6 +1938,21 @@ window.__ModuleLoader__.load({
         else showNotice(errorText(result.error) || zh.actionFailed, true)
         return result.ok === true
       }
+
+      /** Dou Dizhu writes (PROTOCOL §7.3): bid / play / pass / start. */
+      const toggleCard = (card) => {
+        setSelectedCards((current) => (current.indexOf(card) === -1
+          ? current.concat([card])
+          : current.filter((item) => item !== card)))
+      }
+      const playSelected = async () => {
+        if (selectedCards.length === 0) return
+        const saved = await act({ type: 'play', cards: selectedCards })
+        if (saved) setSelectedCards([])
+      }
+      const passTurn = () => void act({ type: 'pass' })
+      const bidTurn = (value) => void act({ type: 'bid', bid: value })
+      const startRound = () => void act({ type: 'start' }, zh.noticeStart)
 
       /* ---------------- display prefs: auto-fade + title-bar drag ---------------- */
 
@@ -1620,8 +2055,37 @@ window.__ModuleLoader__.load({
         return ''
       })()
 
+      const ddz = isDdz
+        ? buildDoudizhuContent({
+          role,
+          isSpectator,
+          phase,
+          players,
+          me,
+          turnNode,
+          myNode,
+          turnNick,
+          lastPlay: ddzLastPlay,
+          mustPlay: ddzMustPlay,
+          myCards: ddzMyCards,
+          selectedCards,
+          toggleCard,
+          landlordPlayer,
+          myScore,
+          busy,
+          connectionBroken,
+          turnRemainingMs,
+          playSelected,
+          passTurn,
+          bidTurn,
+          startRound,
+        })
+        : null
+
       let hint = ''
-      if (isSpectator) {
+      if (isDdz) {
+        hint = ddz.hint
+      } else if (isSpectator) {
         hint = zh.spectatorHint
       } else if (phase === 'playing') {
         if (myTurn) {
@@ -1661,7 +2125,9 @@ window.__ModuleLoader__.load({
           onBlur: onFocusOut,
         }, [
           h('span', { key: 'dot', className: 'dsh-card-lan-capsule-dot' + (stale || reconnecting || reconnectFailed ? ' is-stale' : '') }),
-          h('span', { key: 'text' }, round > 0 ? fmt(zh.capsule, { n: round }) : zh.capsuleIdle),
+          h('span', { key: 'text' }, isDdz
+            ? (round > 0 ? fmt(zh.ddzCapsule, { n: round }) : zh.ddzCapsuleIdle)
+            : (round > 0 ? fmt(zh.capsule, { n: round }) : zh.capsuleIdle)),
           h('span', { key: 'phase', className: 'dsh-card-lan-capsule-phase' }, phaseLabel),
           reconnecting
             ? h('span', { key: 'reconnect', className: 'dsh-card-lan-capsule-stale' }, zh.capsuleReconnecting)
@@ -1682,8 +2148,11 @@ window.__ModuleLoader__.load({
           h('span', {
             key: 'title',
             className: 'dsh-card-lan-title',
-          }, round > 0 ? fmt(zh.tableTitle, { n: round }) : zh.tableTitleIdle),
+          }, isDdz
+            ? (round > 0 ? fmt(zh.ddzTitle, { n: round }) : zh.ddzTitleIdle)
+            : (round > 0 ? fmt(zh.tableTitle, { n: round }) : zh.tableTitleIdle)),
           h('span', { key: 'phase', className: 'dsh-card-lan-pill is-' + phase }, phaseLabel),
+          ...(isDdz ? ddz.headExtras : []),
           isSpectator
             ? h('span', { key: 'spectator', className: 'dsh-card-lan-pill is-spectator' }, zh.spectatorBadge)
             : null,
@@ -1765,7 +2234,7 @@ window.__ModuleLoader__.load({
         score: scoreMap !== null ? scoreMap[asString(slot.node, '')] : null,
       }))
 
-      const resultBanner = phase === 'result'
+      const bjResultBanner = phase === 'result'
         ? h('div', {
           key: 'result',
           className: 'dsh-card-lan-banner is-' + (myResult !== '' ? myResult : 'none'),
@@ -1775,9 +2244,9 @@ window.__ModuleLoader__.load({
           : myResult === 'lose' ? zh.resultLose : myResult === 'push' ? zh.resultPush : zh.resultOver)
         : null
 
-      const actionNodes = []
+      const bjActionNodes = []
       if (canStart) {
-        actionNodes.push(h('button', {
+        bjActionNodes.push(h('button', {
           key: 'start',
           type: 'button',
           className: 'dsh-card-lan-button dsh-card-lan-button-primary',
@@ -1787,14 +2256,14 @@ window.__ModuleLoader__.load({
       }
       // Spectators never see seat actions (PROTOCOL.md §5 overlay 8).
       if (phase === 'playing' && me !== undefined && !isSpectator) {
-        actionNodes.push(h('button', {
+        bjActionNodes.push(h('button', {
           key: 'hit',
           type: 'button',
           className: 'dsh-card-lan-button dsh-card-lan-button-primary',
           disabled: busy || !myTurn || connectionBroken,
           onClick: () => void act({ type: 'hit' }),
         }, zh.hit))
-        actionNodes.push(h('button', {
+        bjActionNodes.push(h('button', {
           key: 'stand',
           type: 'button',
           className: 'dsh-card-lan-button',
@@ -1811,11 +2280,17 @@ window.__ModuleLoader__.load({
         }, notice.text)
         : null
 
-      const bodyChildren = [dealerBlock]
-      for (const row of rows) bodyChildren.push(row)
-      if (resultBanner !== null) bodyChildren.push(resultBanner)
-      if (actionNodes.length > 0) {
-        bodyChildren.push(h('div', { key: 'actions', className: 'dsh-card-lan-actions' }, actionNodes))
+      const bodyChildren = []
+      if (isDdz) {
+        for (const node of ddz.bodyNodes) bodyChildren.push(node)
+      } else {
+        bodyChildren.push(dealerBlock)
+        for (const row of rows) bodyChildren.push(row)
+        if (bjResultBanner !== null) bodyChildren.push(bjResultBanner)
+      }
+      const finalActions = isDdz ? ddz.actionNodes : bjActionNodes
+      if (finalActions.length > 0) {
+        bodyChildren.push(h('div', { key: 'actions', className: 'dsh-card-lan-actions' }, finalActions))
       }
       if (hint !== '') bodyChildren.push(h('p', { key: 'hint', className: 'dsh-card-lan-hint' }, hint))
       if (logLines.length > 0) {
@@ -2007,6 +2482,28 @@ window.__ModuleLoader__.load({
       '.dsh-card-lan-capsule-phase{color:var(--dsw-alias-label-secondary,#94a3b8)}',
       '.dsh-card-lan-capsule-stale{color:var(--dsw-alias-state-error-primary,#f87171);font-weight:600}',
       '.dsh-card-lan-capsule-hint{color:var(--dsw-alias-label-secondary,#94a3b8);opacity:.75}',
+      '.dsh-card-lan-tag.is-game-doudizhu{background:rgba(245,158,11,.16);border-color:rgba(245,158,11,.4);color:#fbbf24}',
+      '.dsh-card-lan-tag.is-game-blackjack{background:rgba(148,163,184,.14);border-color:rgba(148,163,184,.3);',
+      'color:var(--dsw-alias-label-secondary,#94a3b8)}',
+      '.dsh-card-lan-pill.is-game-doudizhu{background:rgba(245,158,11,.16);border-color:rgba(245,158,11,.45);color:#fbbf24}',
+      '.dsh-card-lan-tag.is-landlord{background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.4);color:#f87171}',
+      '.dsh-card-lan-tag.is-farmer{background:rgba(34,197,94,.14);border-color:rgba(34,197,94,.35);color:#4ade80}',
+      '.dsh-card-lan-tag.is-bid{background:rgba(245,158,11,.16);color:#fbbf24}',
+      '.dsh-card-lan-row.is-out{opacity:.55}',
+      '.dsh-card-lan-ddz-play{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 10px;border-radius:8px;',
+      'background:var(--dsw-alias-bg-layer-1,rgba(15,23,42,.4));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.25))}',
+      '.dsh-card-lan-ddz-play.is-new{border-style:dashed}',
+      '.dsh-card-lan-ddz-who{font-size:11px;color:var(--dsw-alias-label-secondary,#94a3b8)}',
+      '.dsh-card-lan-ddz-must{margin:0;font-size:12px;font-weight:600;color:#fbbf24}',
+      '.dsh-card-lan-ddz-hand-area{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border-radius:10px;',
+      'background:var(--dsw-alias-bg-layer-1,rgba(15,23,42,.45));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.2))}',
+      '.dsh-card-lan-ddz-hand{display:flex;flex-wrap:wrap;gap:4px;align-items:flex-end;padding:4px 0 8px;min-height:38px}',
+      '.dsh-card-lan-ddz-card{min-width:24px;height:34px;padding:0 3px;font-size:12px;border:2px solid transparent;',
+      'cursor:pointer;transition:transform .12s ease,border-color .12s ease}',
+      '.dsh-card-lan-ddz-card:hover{transform:translateY(-3px)}',
+      '.dsh-card-lan-ddz-card.is-selected{transform:translateY(-6px);border-color:var(--dsw-alias-brand-primary,#4d6bfe);',
+      'box-shadow:0 6px 12px rgba(77,107,254,.35)}',
+      '.dsh-card-lan-ddz-result-mine{font-weight:700}',
       '@media (prefers-reduced-motion: reduce){.dsh-card-lan-pulse-dot{animation:none}',
       '.dsh-card-lan-overlay,.dsh-card-lan-capsule{transition:none}}',
     ].join('\n')

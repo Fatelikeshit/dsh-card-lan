@@ -317,3 +317,111 @@ window.__ModuleLoader__.load({
 - 集成测试新增覆盖：密码开启后入座（密码对/错）、观战入座、`passwordEnabled`/`spectatorEnabled`/`overlaySize`/`overlayX`/`autoFade` 的配置 patch 与 clamp。
 - 集成测试再新增：`turnTimeout` 配置与非法值、回合超时自动停牌并把回合推进到结算、房主 `close` 后客人收到 `closed`（`view.table` 清空 + `lastError === 'host-closed'`）。
 - 不要自行安装插件或重启 DSH；那是 Lead 的事。
+
+## 7. 多玩法（v4）
+
+21 点保留，新增斗地主。玩法选择在「创建牌桌」时决定，牌桌携带 `game`，所有入座者跟随房主的玩法。
+
+### 7.1 配置与开桌
+
+- `config.game`：`"blackjack" | "doudizhu"`，默认 `"blackjack"`，表示下次「创建牌桌」的玩法（持久化）。
+- `view.config.game` 暴露。
+- `action { "type":"open", "game"?: "blackjack"|"doudizhu" }`：带 `game` 时先写回 `config.game` 再开桌；非法 → `{ok:false,error:"invalid-game"}`。不带则用 `config.game`。
+- `hello.table` 增加 `game` 字段，发现列表按玩法显示（21 点 / 斗地主）。
+- `view.table.game` 必填（两种玩法都带）；21 点的 table 结构不变。
+
+### 7.2 通用动作透传
+
+- UDP `action` 报文的 `action` 对象改为通用透传：`{ "type": string, ...payload }`；房主把 `type` 不属于宿主控制类（open/close/join/leave/start/rejoin）的动作交给当前玩法的引擎处理。
+- HTTP `POST /api/card-lan/action` 同理：`{ "type": "bid"|"play"|"pass"|... , ...payload }`。
+- 引擎校验失败的错误码原样返回（见 7.4）。
+
+### 7.3 斗地主玩法
+
+3 人、54 张（含大小王）。牌面编码沿用 21 点风格：`3S`…`10H`、`JS`/`QH`/`KD`/`AC`、`2S`…，大小王为 `BJ`（小王）、`RJ`（大王）。花色仅用于显示，大小顺序：`3<4<…<10<J<Q<K<A<2<BJ<RJ`。
+
+`view.table`（`game === "doudizhu"`）：
+
+```json
+{
+  "game": "doudizhu",
+  "role": "host|player|spectator",
+  "hostNode": "uuid",
+  "phase": "idle|bidding|playing|result",
+  "round": 3,
+  "turn": "uuid|null",
+  "landlord": "uuid|null",
+  "myCards": ["3S", "3D", "BJ"],
+  "players": [
+    { "node": "uuid", "nick": "甲", "self": true, "count": 17,
+      "status": "playing|out", "role": "landlord|farmer",
+      "result": null, "bidding": true|false|null }
+  ],
+  "lastPlay": { "node": "uuid", "cards": ["AS","AH"], "label": "对 A" },
+  "mustPlay": false,
+  "log": ["..."],
+  "scores": { "uuid": { "win": 1, "lose": 0 } },
+  "staleMs": 0,
+  "turnRemainingMs": 30000
+}
+```
+
+- `myCards`：只有 `self` 玩家拿到自己的手牌；其他人/观战者为 `[]`（隐私要求：房主逐个下发）。
+- `players[].count`：剩余张数；`bidding` 只在 `phase === "bidding"` 时有意义。
+- `lastPlay`：最近一手有效出牌（新一墩时为 `null`）；`mustPlay` 表示当前回合玩家必须出牌（领出）。
+- 观战者看全部牌面信息，但看不到任何人的手牌。
+
+阶段与流程：
+1. 发牌：每人 17 张，底牌 3 张。
+2. `phase === "bidding"`：从 `(round-1) % 3` 号座位开始轮流 `bid`；第一次 `bid true` 的玩家成为地主并拿底牌，转 `playing`；三人都不叫 → 重新发牌（`round+1`），不结算。
+3. `phase === "playing"`：地主先出；每回合可 `play`（出牌）或 `pass`（不要，仅当有 `lastPlay` 且不是自己刚出的牌时可用）。
+4. 所有其他人都 pass 后，`lastPlay` 清空、出牌权回到最后出牌者（`mustPlay=true`）。
+5. 有人出完 → `phase === "result"`：地主先出完 = 地主胜，任一农民先出完 = 农民胜；胜方每人 `win+1`，负方每人 `lose+1`。
+
+牌型（第一版）：
+- 单张、对子、三张、三带一（三张 + 任意单张）、三带二（三张 + 任意对子）；
+- 单顺（≥5 张连续，不含 2/王）、双顺（≥3 对连续，不含 2/王）、飞机（≥2 组连续三张，**不带翅膀**，不含 2/王）；
+- 炸弹（四张同点）、王炸（大小王）；
+- 比较：同类型且同张数比主牌点数；炸弹压一切非炸弹；王炸最大；炸弹之间比点数。
+- 不支持四带二、飞机带翅膀（返回 `bad-cards`）。
+
+动作：
+- `{ "type":"bid", "bid": true|false }`：仅 bidding 阶段、轮到该玩家。
+- `{ "type":"play", "cards": ["3S","3D"] }`：仅 playing 阶段、轮到该玩家、必须压过 `lastPlay`（或领出）。
+- `{ "type":"pass" }`：仅 playing 阶段、有 `lastPlay`、轮到该玩家。
+
+错误码：`not-your-turn`、`bad-phase`、`bad-cards`（牌不在手里 / 牌型非法 / 压不过）、`must-play`（领出时不能过）。
+
+超时（由房主 `turnTimeout` 驱动）：
+- bidding 阶段 → 自动 `bid false`；
+- playing 阶段 → `mustPlay` 时自动出最小的一张单牌，否则自动 `pass`。
+
+掉线/离开：
+- 地主离开 → 农民胜（直接结算）；农民离开 → 该玩家从本局移除（手牌弃掉），若场上只剩地主 → 地主胜；若某位农民已出完且无人可继续 → 按已产生的胜负结算。
+- 不在局中（idle/result）离开只影响座位列表。
+
+### 7.4 引擎模块契约
+
+- 每个玩法一个纯逻辑模块：`lib/games/blackjack.js`（把现有 `lib/engine.js` 收进去或薄封装）与 `lib/games/doudizhu.js`。
+- 宿主只按 `table.game` 分派：`startRound(state)`、`applyAction(state, node, action)`、`snapshot(state, viewerNode, meta)`、`onTimeout(state, node)`、`removePlayer(state, node)`。
+- 引擎不碰 socket/HTTP/定时器，所有输入先由宿主校验来源（是已入座玩家、轮到它）。
+- `lib/engine.js` 保留给 21 点（或移入 games 目录后由宿主 import），斗地主不得复用 21 点的计点逻辑。
+
+### 7.5 浏览器半边（多玩法）
+
+- 大厅「创建牌桌」旁加玩法选择：`21 点` / `斗地主`（默认取 `view.config.game`），点创建时 `action {type:"open", game}`；发现列表显示玩法标签。
+- `view.table.game === "doudizhu"` 时渲染斗地主牌桌（不能用 21 点 UI）：
+  - 顶部：局数、阶段（叫地主中 / 出牌中 / 本局结束）、地主标记、回合倒计时；
+  - 其他人：昵称、地主/农民标记、剩余张数、当前回合高亮、已出完；
+  - 中间：`lastPlay` 展示（谁出了什么牌 / 新一墩），`mustPlay` 时提示「轮到你领出」；
+  - 我的区域：手牌横排（点击选中/取消，选中上浮高亮），按钮：`叫地主`/`不叫`（bidding 且轮到我）、`出牌`/`不要`（playing 且轮到我；不合法时置灰或提示）、房主 `开始下一局`（result）；
+  - 结算横幅：地主胜/农民胜 + 我的输赢；观战者看牌局但不显示手牌、无操作按钮。
+- 21 点 UI 保留原样；`view.table.game` 缺省按 `"blackjack"` 处理。
+- 样式与类名沿用 `dsh-card-lan-` 前缀，牌面仍是文字渲染。
+
+## 8. 验收补充（v4）
+
+- `node --check` 两个半边通过。
+- `node --test test/` 全绿：既有 21 点/密码/观战/超时/重连用例不回归；新增斗地主引擎单测（牌型识别与比较、叫地主流程、出牌/过牌、结算、超时动作、地主离开）。
+- 集成测试覆盖：`open {game:"doudizhu"}` 后 `view.table.game` 正确、3 人入座、叫地主→出牌→结算全流程（可用引擎直调或双实例）。
+- 不新增依赖、不装插件、不重启 DSH。

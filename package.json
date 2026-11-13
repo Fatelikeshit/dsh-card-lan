@@ -1,8 +1,8 @@
 {
   "name": "dsh-card-lan",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
-  "description": "局域网 21 点牌桌：UDP 房间发现 + 房主权威牌局，仿 dsh-pet-lan 的联机模型。",
+  "description": "局域网牌桌：21 点 + 斗地主，UDP 房间发现 + 房主权威牌局，支持密码/观战/掉线重连。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -12,6 +12,7 @@
   "files": [
     "lib/index.js",
     "lib/engine.js",
+    "lib/games/doudizhu.js",
     "client.js",
     "cordis.patch.yml",
     "README.md"
@@ -33,7 +34,7 @@
   },
   "scripts": {
     "test": "node --test test/",
-    "check": "node --check lib/index.js && node --check lib/engine.js && node --check client.js"
+    "check": "node --check lib/index.js && node --check lib/engine.js && node --check lib/games/doudizhu.js && node --check client.js"
   },
   "license": "MIT",
   "author": "Fatelikeshit",
