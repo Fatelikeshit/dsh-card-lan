@@ -69,6 +69,9 @@ window.__ModuleLoader__.load({
     const DEFAULT_TURN_TIMEOUT = 45
     const MAX_TURN_TIMEOUT = 300
 
+    /** Bot back-fill bounds (PROTOCOL.md §7.8 config.botCount): 0..2. */
+    const MAX_BOT_COUNT = 2
+
     /** Card suits: spades/clubs ink, hearts/diamonds red (engine.js encoding). */
     const SUIT_GLYPHS = { S: '♠', H: '♥', D: '♦', C: '♣' }
     const RED_SUITS = { H: true, D: true }
@@ -131,6 +134,7 @@ window.__ModuleLoader__.load({
       'reconnect-failed': '与房主的连接已断开，重连失败；可以点「重新连接」再试一次。',
       'no-target': '没有可重连的房主信息，请重新加入牌桌。',
       'invalid-turn-timeout': '回合超时必须是 0–300 的整数秒。',
+      'invalid-botcount': '机器人数量不合法：只能是 0、1 或 2。',
       'invalid-fillbots': '人机补位开关必须是一个布尔值。',
       'bad-cards': '牌型不合法，或者压不过上家；换一手再试。',
       'must-play': '轮到你领出，必须出牌，不能不要。',
@@ -165,8 +169,12 @@ window.__ModuleLoader__.load({
       passwordRequired: '开启房间密码时必须填写密码（1–16 个字符）。',
       spectatorEnabled: '允许观战',
       spectatorEnabledHint: '开启后别人可以不占座位、只看牌局。',
-      fillBots: '人机补位（斗地主/跑得快）',
-      fillBotsHint: '按已入座真人自动补足 3 人；后加入的真人会顶掉机器人；21 点不受影响。',
+      botCount: '机器人数量',
+      botCountNone: '不补',
+      botCountOne: '1 个',
+      botCountTwo: '2 个',
+      botCountHint: '最多补几个机器人（斗地主/跑得快需要 3 人）；后加入的真人会顶掉机器人；21 点不受影响。',
+      noPlayersCard: '人数不足：斗地主/跑得快需要 3 人',
       botTag: '🤖 机器人',
       turnTimeout: '回合超时（秒）',
       turnTimeoutHint: '0–300 秒，0 表示关闭；超时房主会自动替当前玩家停牌。默认 45。',
@@ -529,6 +537,8 @@ window.__ModuleLoader__.load({
       // Pao De Kuai's must-play rule reads differently from Doudizhu's: there
       // it means "you can beat this, so you must" (PROTOCOL §7.6).
       if (trimmed === 'must-play' && game === 'paodekuai') return zh.pkMustPlay
+      // Dou Dizhu / Pao De Kuai need 3 seats; short tables report `no-players`.
+      if (trimmed === 'no-players' && isCardGameId(game)) return zh.noPlayersCard
       return ERROR_TEXT[trimmed] !== undefined ? ERROR_TEXT[trimmed] : fmt(zh.actionFailedWith, { reason: trimmed })
     }
 
@@ -1098,7 +1108,7 @@ window.__ModuleLoader__.load({
       const [opacityDraft, setOpacityDraft] = useState(null)
       const [sizeDraft, setSizeDraft] = useState(null)
       const [autoFadeDraft, setAutoFadeDraft] = useState(null)
-      const [fillBotsDraft, setFillBotsDraft] = useState(null)
+      const [botCountDraft, setBotCountDraft] = useState(null)
       const [gameDraft, setGameDraft] = useState(null)
       const opacityTimer = useRef(null)
       const seeded = useRef(false)
@@ -1135,11 +1145,17 @@ window.__ModuleLoader__.load({
         : DEFAULT_OPACITY
       const configSize = overlaySizeOf(previewConfig)
       const configAutoFade = previewConfig !== null ? previewConfig.autoFade !== false : true
-      const configFillBots = previewConfig !== null ? previewConfig.fillBots === true : false
+      // Bot back-fill count (PROTOCOL §7.8): 0..2, migrated from the old boolean
+      // `fillBots` (true → 2, false → 0) when an older host only exposes that.
+      const configBotCount = previewConfig === null
+        ? 0
+        : (Number.isInteger(previewConfig.botCount)
+          ? Math.min(MAX_BOT_COUNT, Math.max(0, previewConfig.botCount))
+          : (previewConfig.fillBots === true ? MAX_BOT_COUNT : 0))
       const effectiveOpacity = opacityDraft !== null ? opacityDraft : configOpacity
       const effectiveSize = sizeDraft !== null ? sizeDraft : configSize
       const effectiveAutoFade = autoFadeDraft !== null ? autoFadeDraft : configAutoFade
-      const effectiveFillBots = fillBotsDraft !== null ? fillBotsDraft : configFillBots
+      const effectiveBotCount = botCountDraft !== null ? botCountDraft : configBotCount
       // Game picker for the next 创建牌桌 (PROTOCOL §7.1): defaults to the
       // host's persisted config.game, not saved with the rest of the form.
       const configGame = gameOf(previewConfig !== null ? previewConfig.game : DEFAULT_GAME)
@@ -1158,8 +1174,8 @@ window.__ModuleLoader__.load({
       }, [configAutoFade])
 
       useEffect(() => {
-        setFillBotsDraft(null)
-      }, [configFillBots])
+        setBotCountDraft(null)
+      }, [configBotCount])
 
       useEffect(() => {
         setGameDraft(null)
@@ -1251,17 +1267,28 @@ window.__ModuleLoader__.load({
         })
       }
 
-      /** Bot back-fill toggle (PROTOCOL §7.8): host-only, Dou Dizhu/Paodekuai. */
-      const changeFillBots = (checked) => {
-        const value = checked === true
-        setFillBotsDraft(value)
-        void applyDisplay({ fillBots: value }).then((saved) => {
-          if (!saved) setFillBotsDraft(null)
+      /** Bot back-fill count (PROTOCOL §7.8): host-only, Dou Dizhu/Paodekuai. */
+      const changeBotCount = (next) => {
+        const numeric = Number(next)
+        const value = Number.isInteger(numeric)
+          ? Math.min(MAX_BOT_COUNT, Math.max(0, numeric))
+          : 0
+        setBotCountDraft(value)
+        void applyDisplay({ botCount: value }).then((saved) => {
+          // Failure: drop the optimistic draft so the select snaps back to the
+          // host value; the notice from applyDisplay explains why.
+          if (!saved) setBotCountDraft(null)
         })
       }
 
       const resetOverlayPosition = () => {
         void applyDisplay({ overlayX: null, overlayY: null }, zh.resetPositionDone)
+      }
+
+      /** Game context of the local table, for game-specific error wording. */
+      const currentTableGame = () => {
+        const tableNow = data !== null ? asObject(data.table) : null
+        return tableNow !== null ? gameOf(tableNow.game) : DEFAULT_GAME
       }
 
       const act = async (body, successText) => {
@@ -1270,7 +1297,7 @@ window.__ModuleLoader__.load({
         const result = await store.action(body)
         setBusy(false)
         if (result.ok === true) showNotice(successText === undefined ? '' : successText, false)
-        else showNotice(errorText(result.error) || zh.actionFailed, true)
+        else showNotice(errorText(result.error, currentTableGame()) || zh.actionFailed, true)
         return result.ok === true
       }
 
@@ -1453,19 +1480,21 @@ window.__ModuleLoader__.load({
             h('span', { key: 'label' }, zh.spectatorEnabled),
           ]),
           h('span', { key: 'spectatorHint', className: 'dsh-card-lan-muted dsh-card-lan-small' }, zh.spectatorEnabledHint),
-          h('div', { key: 'fillBots', className: 'dsh-card-lan-field' }, [
-            h('label', { key: 'check', className: 'dsh-card-lan-check' }, [
-              h('input', {
-                key: 'input',
-                type: 'checkbox',
-                'aria-label': zh.fillBots,
-                checked: effectiveFillBots,
-                disabled: busy,
-                onChange: (event) => changeFillBots(event.target.checked),
-              }),
-              h('span', { key: 'label' }, zh.fillBots),
+          h('label', { key: 'botCount', className: 'dsh-card-lan-field' }, [
+            h('span', { key: 'label', className: 'dsh-card-lan-label' }, zh.botCount),
+            h('select', {
+              key: 'select',
+              className: 'dsh-card-lan-input dsh-card-lan-input-narrow',
+              'aria-label': zh.botCount,
+              value: String(effectiveBotCount),
+              disabled: busy,
+              onChange: (event) => changeBotCount(Number(event.target.value)),
+            }, [
+              h('option', { key: '0', value: '0' }, zh.botCountNone),
+              h('option', { key: '1', value: '1' }, zh.botCountOne),
+              h('option', { key: '2', value: '2' }, zh.botCountTwo),
             ]),
-            h('span', { key: 'hint', className: 'dsh-card-lan-muted dsh-card-lan-small' }, zh.fillBotsHint),
+            h('span', { key: 'hint', className: 'dsh-card-lan-muted dsh-card-lan-small' }, zh.botCountHint),
           ]),
           h('label', { key: 'turnTimeout', className: 'dsh-card-lan-field' }, [
             h('span', { key: 'label', className: 'dsh-card-lan-label' }, zh.turnTimeout),
