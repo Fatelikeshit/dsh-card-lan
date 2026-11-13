@@ -28,6 +28,7 @@ dsh-card-lan/
 - `enabled`：联机开关，默认 `true`。
 - `passwordEnabled` / `password`：房主开桌时是否启用房间密码、密码内容（1–16 字符，开启时必填）。密码只存在本机配置，绝不进 hello/state 报文（hello 只广播布尔 `password`）。
 - `spectatorEnabled`：房主是否允许观战，默认 `true`。
+- `turnTimeout`：回合超时秒数（0–300，0 表示关闭），默认 `45`；超时由房主自动替当前玩家「停牌」。
 - `overlaySize`：浮层大小 `small|medium|large`，默认 `medium`。
 - `overlayX` / `overlayY`：浮层上次拖动位置（像素整数，`null` = 默认右下角）。
 - `autoFade`：鼠标离开浮层时自动变淡，默认 `true`。
@@ -116,6 +117,23 @@ dsh-card-lan/
 - 房主每 1000ms 检查已入座玩家的 hello `lastSeen`；超过 **12000ms** 未见则从牌桌移除（若在局中则按 `leave` 处理），并发一次 state。
 - 房主自己关闭牌桌（`close`）时清空玩家，不再广播 `table.open`。
 
+### 2.5b 房主关桌通知（房主 → 客人，单播）
+
+```json
+{ "v":1, "t":"closed", "room":"dsh-card", "host":"房主node", "reason":"closed", "sentAt":1700000000000 }
+```
+
+- 房主 `closeTable` / 关闭联机 / 更换房间名或端口时，向所有玩家和观战者各单播一次 `closed`。
+- 客人收到后清空本地座位与观战/玩家状态，`view.lastError = "host-closed"`，UI 提示「房主已关闭牌桌」并回大厅。
+
+### 2.5c 客人自动重连
+
+- 客人（player/spectator）在 `guestStaleMs > 5000` 且仍持有上次房主信息时，自动用记住的 `{hostNode, ip, port, pw, role}` 重发 `join`（每 1s，最多 5 次）；期间 `view.reconnecting = true`。
+- 收到任意 `state` 即重连成功：`reconnecting = false`、`lastError` 清空、`staleMs` 归零。
+- 5 次仍失败：`reconnecting = false`、`lastError = "reconnect-failed"`，停止自动重试；房主信息（node/ip/port/pw/role）留在进程内存里，用户可触发 `action {type:"rejoin"}` 再试一次。
+- 房主信息（含密码）只存进程内存，不写盘；`leave`、收到 `closed`、手动 `join` 都会清空它。
+- 房主关闭牌桌后客人不会重连（`closed` 已清空房主信息）。
+
 ## 3. HTTP API（只允许 127.0.0.1 回环访问）
 
 每个路由 `ctx.webServer.register({ kind: 'exact', path, handler })`，`Cache-Control: no-store`，错误也要返回 JSON。
@@ -134,12 +152,13 @@ dsh-card-lan/
   "config": {
     "enabled": true, "room": "dsh-card", "port": 41235, "overlayOpacity": 0.9,
     "passwordEnabled": false, "password": "", "spectatorEnabled": true,
-    "overlaySize": "medium", "overlayX": null, "overlayY": null, "autoFade": true,
+    "overlaySize": "medium", "overlayX": null, "overlayY": null, "autoFade": true, "turnTimeout": 45,
     "nick": "大肥鱼", "nodeId": "uuid-xxxx"
   },
   "udpReady": true,
   "boundPort": 41235,
   "lastError": null,
+  "reconnecting": false,
   "host": { "node": "自己uuid", "ip": "192.168.1.5", "port": 41235, "open": true },
   "peers": [
     {
@@ -164,7 +183,8 @@ dsh-card-lan/
     "dealer": { "cards": ["9S"], "hidden": true, "total": 9 },
     "log": ["第 2 局开始", "大肥鱼 要了一张牌"],
     "scores": { "uuid-xxxx": { "win": 1, "lose": 0, "push": 0 } },
-    "staleMs": 0
+    "staleMs": 0,
+    "turnRemainingMs": 18000
   },
   "stats": { "sent": 0, "received": 0, "dropped": 0, "startedAt": 1700000000000 }
 }
@@ -175,17 +195,21 @@ dsh-card-lan/
 - `turn` 是待行动玩家 node 或 `null`。`dealer` 用 `engine.visibleDealer()`：`playing` 阶段只给第一张牌、`hidden:true`。
 - `players[i].self` 标记本机玩家；`scores` 以 node 为 key，所有人都在（含 0）。
 - `staleMs`：`role` 为 `player` / `spectator` 时有意义，为距最近一次收到 state 的毫秒数；`role === "host"` 恒 0。
+- `reconnecting`：客人正在自动重连时为 `true`（UI 显示「重连中…」）；房主恒 `false`。
+- `turnRemainingMs`：`phase === "playing"` 且 `turnTimeout > 0` 时为当前回合剩余毫秒数（state 心跳每秒刷新），否则 `null`。超时房主自动替当前玩家停牌。
 
 ### 3.2 `POST /api/card-lan/config`
 
 请求体：`{ "enabled"?: boolean, "room"?: string, "port"?: number, "nick"?: string, "overlayOpacity"?: number,
   "passwordEnabled"?: boolean, "password"?: string, "spectatorEnabled"?: boolean,
-  "overlaySize"?: "small"|"medium"|"large", "overlayX"?: number|null, "overlayY"?: number|null, "autoFade"?: boolean }`
-返回：`{ "ok": true, "config": {...} }` 或 `{ "ok": false, "error": ... }`（新增 `invalid-password`、`invalid-overlay-size`、`invalid-overlay-position`、`invalid-autofade`）
+  "overlaySize"?: "small"|"medium"|"large", "overlayX"?: number|null, "overlayY"?: number|null, "autoFade"?: boolean,
+  "turnTimeout"?: number }`
+返回：`{ "ok": true, "config": {...} }` 或 `{ "ok": false, "error": ... }`（新增 `invalid-turn-timeout`）
 - `overlayOpacity`：牌桌浮层的整体不透明度，0.25–1，服务端 clamp 到两位小数；本机显示偏好，不影响联机对局。
 - `password`：1–16 字符；`passwordEnabled: true` 而密码为空 → `invalid-password`。
 - `overlaySize`：`small|medium|large` 三档；`overlayX/overlayY`：`null`（恢复默认右下角）或 -10000–10000 的整数，越界 clamp。
 - `autoFade`：鼠标离开浮层时自动变淡的开关。
+- `turnTimeout`：0–300 的整数秒；0 关闭，非整数/越界 → `invalid-turn-timeout`。
 规则：
 - 改 `room` 或 `port`：清空 peers、关闭牌桌、重新绑定 socket（`port` 变化时才重绑）；`enabled` 由 true→false 关闭 socket 并清空牌桌。
 - 其他字段改动持久化即可。
@@ -194,18 +218,19 @@ dsh-card-lan/
 
 请求体：
 ```json
-{ "type": "open" | "close" | "join" | "leave" | "start" | "hit" | "stand",
+{ "type": "open" | "close" | "join" | "leave" | "start" | "hit" | "stand" | "rejoin",
   "hostNode": "仅 join：从 peers 里选",
   "hostIp": "仅 join 手动入座", "hostPort": 41235,
   "pw": "仅 join：房间密码（无密码时省略）",
   "role": "仅 join：player | spectator（缺省 player）" }
 ```
-返回 `{ "ok": true }` 或 `{ "ok": false, "error": "..." }`（错误字符串直接可展示：`udp-offline`、`table-closed`、`not-your-turn`、`not-playing`、`unknown-peer`、`no-players`、`not-host`、`already-seated`、`send-failed`）。`join` 被房主拒绝时通过 `view.lastError` 反馈：`join-password`、`join-watch-closed`、`join-watch-full`、`join-full`、`join-closed`。
+返回 `{ "ok": true }` 或 `{ "ok": false, "error": "..." }`（错误字符串直接可展示：`udp-offline`、`table-closed`、`not-your-turn`、`not-playing`、`unknown-peer`、`no-players`、`not-host`、`already-seated`、`send-failed`、`no-target`）。`join` 被房主拒绝时通过 `view.lastError` 反馈：`join-password`、`join-watch-closed`、`join-watch-full`、`join-full`、`join-closed`。
 
 语义：
 - `open`：本机成为房主，牌桌 = `newTable([{node, nick}])`（`phase:"idle"`），广播 hello。
 - `close`：房主关桌，清空玩家，广播 hello。
 - `join`：向 `hostNode` 对应 peer（或 `hostIp:hostPort`）单播 `join`（带上可选 `pw` 与 `role`）；立即返回 ok，结果靠轮询。`role:"spectator"` 即观战。
+- `rejoin`：用进程内存里记住的房主信息再次发起入座（自动重连失败后用户点「重新连接」用）；没有记忆 → `no-target`。
 - `leave`：自己退出牌桌；房主退出等价于 `close`。
 - `start`：房主开始/下一局（`phase` 为 `idle` 或 `result` 时），调 `engine.startRound`。
 - `hit` / `stand`：房主本地直接 `engine.applyAction`；客人则发 UDP `action`（带 aid 重传）。
@@ -265,10 +290,11 @@ window.__ModuleLoader__.load({
 4. 发现的牌桌列表：每个 peer 若 `table.open` 显示 `昵称 · 2 人` + `加入` 按钮；未开桌的显示为“在线”。
 5. 手动加入：`IP` + `端口` + `加入`（跨网段兜底）。
 6. 当前状态说明：我是房主 / 我在某人的牌桌 / 未入座 / 我在观战。
-7. 房间设置（房主）：「启用房间密码」勾选 + 密码输入（开启时必填 1–16 字符）、「允许观战」勾选；随「保存」一起 PATCH。
+7. 房间设置（房主）：「启用房间密码」勾选 + 密码输入（开启时必填 1–16 字符）、「允许观战」勾选、「回合超时」秒数输入（0–300，0 关闭，默认 45）；随「保存」一起 PATCH。
 8. 发现的牌桌行：`table.password === true` 时给密码输入再「加入」；`table.watch === true` 时给「观战」按钮。
 9. 手动加入：IP + 端口 + 可选密码 + 「加入」。
 10. 浮层显示设置：大小三档（小/中/大）、「自动变淡」开关、「重置位置」按钮；不透明度滑杆保留。
+11. 重连状态：`view.reconnecting === true` 时状态行显示「正在重连房主…」；`view.lastError === 'reconnect-failed'` 时显示「重连失败」+「重新连接」按钮（`action {type:'rejoin'}`）；`view.lastError === 'host-closed'` 时显示「房主已关闭牌桌」并回未入座状态。
 
 ### 牌桌浮层（shell.overlay）必须包含
 
@@ -280,6 +306,8 @@ window.__ModuleLoader__.load({
 6. `staleMs > 4000` 显示“房主失联，等待重连…”。
 7. 拖动标题栏移动浮层，松手把 `overlayX/overlayY` PATCH 回配置；三档大小用宽度变量生效；`autoFade` 开启时鼠标离开浮层整体变淡约 45%（不低于 0.25），移回恢复；快捷键 `Ctrl+Shift+H` 隐藏/显示浮层（隐藏时整个 overlay 不渲染）。
 8. `role === "spectator"` 时：顶部显示「观战中」，不出现要牌/停牌/开始本局/下一局按钮，`self` 标记不出现。
+9. 重连中（`view.reconnecting`）时顶部/提示区显示「正在重连房主…」；失联且重连失败时显示「重连失败」+「重新连接」按钮；`role` 仍按玩家/观战渲染。
+10. 轮到我且 `table.turnRemainingMs` 存在时，提示「轮到你了 · 剩 {n} 秒（超时自动停牌）」，随 state 心跳刷新。
 
 ## 6. 验收
 
@@ -287,4 +315,5 @@ window.__ModuleLoader__.load({
 - `node --test test/` 全绿（引擎单测 + Lead 的集成测试，集成测试直接调 `createCardLan`，不经过 HTTP）。
 - 集成测试覆盖：hello 发现、手动入座、开局、要牌/停牌、房主推 state、动作重传去重、断线清理。
 - 集成测试新增覆盖：密码开启后入座（密码对/错）、观战入座、`passwordEnabled`/`spectatorEnabled`/`overlaySize`/`overlayX`/`autoFade` 的配置 patch 与 clamp。
+- 集成测试再新增：`turnTimeout` 配置与非法值、回合超时自动停牌并把回合推进到结算、房主 `close` 后客人收到 `closed`（`view.table` 清空 + `lastError === 'host-closed'`）。
 - 不要自行安装插件或重启 DSH；那是 Lead 的事。

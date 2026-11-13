@@ -1,6 +1,6 @@
 {
   "name": "dsh-card-lan",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "局域网 21 点牌桌：UDP 房间发现 + 房主权威牌局，仿 dsh-pet-lan 的联机模型。",
   "type": "module",

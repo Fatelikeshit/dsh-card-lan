@@ -14,6 +14,11 @@
  * those lives in the same view config: the lobby PATCHes it, the overlay reads
  * it — there is no second source of truth.
  *
+ * v3 adds the connection story: auto-reconnect / rejoin-failed / host-closed
+ * banners (lobby + overlay), the host-driven turn timeout setting, and the
+ * per-turn countdown hint. Guests always render their player/spectator view
+ * while reconnecting; only actions are disabled until the link is back.
+ *
  * @module dsh-card-lan/client
  */
 
@@ -49,6 +54,10 @@ window.__ModuleLoader__.load({
     /** Default anchor (bottom-right, above the composer) and drag save delay. */
     const DEFAULT_EDGE = 16
     const POSITION_SAVE_MS = 260
+
+    /** Turn timeout bounds (PROTOCOL.md §3.2 config.turnTimeout). */
+    const DEFAULT_TURN_TIMEOUT = 45
+    const MAX_TURN_TIMEOUT = 300
 
     /** Card suits: spades/clubs ink, hearts/diamonds red (engine.js encoding). */
     const SUIT_GLYPHS = { S: '♠', H: '♥', D: '♦', C: '♣' }
@@ -90,6 +99,10 @@ window.__ModuleLoader__.load({
       'join-closed': '房主已经关掉牌桌了。',
       'join-timeout': '入座请求超时，对方可能没有响应。',
       'invalid-opacity': '透明度不合法：需要 0.25–1 之间的数值。',
+      'host-closed': '房主已关闭牌桌。',
+      'reconnect-failed': '与房主的连接已断开，重连失败；可以点「重新连接」再试一次。',
+      'no-target': '没有可重连的房主信息，请重新加入牌桌。',
+      'invalid-turn-timeout': '回合超时必须是 0–300 的整数秒。',
     }
 
     /** All user-visible copy; this plugin ships Chinese only. */
@@ -116,6 +129,9 @@ window.__ModuleLoader__.load({
       passwordRequired: '开启房间密码时必须填写密码（1–16 个字符）。',
       spectatorEnabled: '允许观战',
       spectatorEnabledHint: '开启后别人可以不占座位、只看牌局。',
+      turnTimeout: '回合超时（秒）',
+      turnTimeoutHint: '0–300 秒，0 表示关闭；超时房主会自动替当前玩家停牌。默认 45。',
+      turnTimeoutInvalid: '回合超时必须是 0–300 的整数秒。',
       opacity: '牌桌透明度',
       opacityHint: '调低后牌桌更不显眼，文字也会一起变淡；鼠标移到牌桌上会临时恢复不透明。',
       opacityValue: '{n}%',
@@ -143,6 +159,13 @@ window.__ModuleLoader__.load({
       peerCount: '发现 {n} 个对端',
       noPeers: '还没发现同房间的电脑。确认对方也开了「牌桌联机」、连着同一个 Wi-Fi，并且房间名和端口一致。',
       lastError: '最近错误',
+      reconnecting: '正在重连房主…',
+      reconnectFailed: '重连失败',
+      reconnectFailedDetail: '自动重连多次都失败了，可以手动再试一次。',
+      rejoin: '重新连接',
+      noticeRejoin: '正在重新连接房主…',
+      hostClosed: '房主已关闭牌桌',
+      hostClosedDetail: '牌桌已经结束，你已回到未入座状态。',
       disabledHint: '联机已关闭：本机不会广播，也看不到别人的牌桌。',
       stats: '已发 {sent} 包 · 已收 {received} 包 · 丢弃 {dropped} 包',
       createTable: '创建牌桌',
@@ -201,6 +224,7 @@ window.__ModuleLoader__.load({
       staleTitle: '房主失联，等待重连…',
       staleDetail: '{s} 秒没有收到房主状态',
       yourTurn: '轮到你了',
+      turnCountdown: '轮到你了 · 剩 {n} 秒（超时自动停牌）',
       waitOthers: '等待 {name} 行动…',
       waitHost: '等待房主的状态同步…',
       idleHostHint: '朋友加入后点「开始本局」。',
@@ -216,6 +240,7 @@ window.__ModuleLoader__.load({
       capsule: '21 点 · 第 {n} 局',
       capsuleIdle: '21 点 · 未开局',
       capsuleStale: '失联',
+      capsuleReconnecting: '重连中',
       spectatorBadge: '观战中',
       spectatorHint: '观战中，不参与出牌',
     }
@@ -675,6 +700,9 @@ window.__ModuleLoader__.load({
           passwordEnabled: config.passwordEnabled === true,
           password: asString(config.password, ''),
           spectatorEnabled: config.spectatorEnabled !== false,
+          turnTimeout: Number.isFinite(config.turnTimeout)
+            ? Math.min(MAX_TURN_TIMEOUT, Math.max(0, Math.round(config.turnTimeout)))
+            : DEFAULT_TURN_TIMEOUT,
         })
         setManual({ ip: '', port: String(port), password: '' })
       }, [data])
@@ -719,6 +747,12 @@ window.__ModuleLoader__.load({
           showNotice(zh.passwordRequired, true)
           return
         }
+        // Turn timeout is integer seconds in [0, 300]; 0 disables it.
+        const turnTimeout = Number(form.turnTimeout)
+        if (!Number.isInteger(turnTimeout) || turnTimeout < 0 || turnTimeout > MAX_TURN_TIMEOUT) {
+          showNotice(zh.turnTimeoutInvalid, true)
+          return
+        }
         setBusy(true)
         showNotice('')
         const result = await store.configure({
@@ -729,6 +763,7 @@ window.__ModuleLoader__.load({
           passwordEnabled: form.passwordEnabled === true,
           password: form.passwordEnabled === true ? form.password : '',
           spectatorEnabled: form.spectatorEnabled === true,
+          turnTimeout,
         })
         setBusy(false)
         if (result.ok === true) showNotice(zh.saved, false)
@@ -856,6 +891,19 @@ window.__ModuleLoader__.load({
       const lastError = data.lastError
       const stats = asObject(data.stats)
       const now = Date.now()
+      // Connection state (PROTOCOL §2.5b/§2.5c, §3.1): dedicated UI, not just
+      // another line in the error log.
+      const reconnecting = data.reconnecting === true
+      const lastErrorCode = lastError !== null && lastError !== undefined ? String(lastError) : ''
+      const reconnectFailed = lastErrorCode === 'reconnect-failed'
+      const hostClosedCode = lastErrorCode === 'host-closed'
+      // These two get their own banner (the rejoin button lives there), so the
+      // generic "最近错误" line would only duplicate them.
+      const genericLastError = lastErrorCode !== '' && !reconnectFailed && !hostClosedCode
+      // A stale `host-closed` can linger on the host side (creating a new table
+      // does not clear it), so only treat it as current while we really are
+      // seatless; otherwise the banner would lie about a healthy table.
+      const hostClosed = hostClosedCode && role === null
 
       const fields = h('div', { key: 'fields', className: 'dsh-card-lan-fields' }, [
         h('label', { key: 'enabled', className: 'dsh-card-lan-check' }, [
@@ -962,6 +1010,24 @@ window.__ModuleLoader__.load({
             h('span', { key: 'label' }, zh.spectatorEnabled),
           ]),
           h('span', { key: 'spectatorHint', className: 'dsh-card-lan-muted dsh-card-lan-small' }, zh.spectatorEnabledHint),
+          h('label', { key: 'turnTimeout', className: 'dsh-card-lan-field' }, [
+            h('span', { key: 'label', className: 'dsh-card-lan-label' }, zh.turnTimeout),
+            h('input', {
+              key: 'input',
+              className: 'dsh-card-lan-input dsh-card-lan-input-narrow',
+              type: 'number',
+              min: 0,
+              max: MAX_TURN_TIMEOUT,
+              step: 1,
+              'aria-label': zh.turnTimeout,
+              value: form !== null ? form.turnTimeout : '',
+              disabled: form === null || busy,
+              onChange: (event) => setForm((current) => (
+                current === null ? current : { ...current, turnTimeout: Number(event.target.value) }
+              )),
+            }),
+            h('span', { key: 'hint', className: 'dsh-card-lan-muted dsh-card-lan-small' }, zh.turnTimeoutHint),
+          ]),
         ]),
         h('div', { key: 'display', className: 'dsh-card-lan-field dsh-card-lan-settings-block' }, [
           h('span', { key: 'label', className: 'dsh-card-lan-label' }, zh.displayLabel),
@@ -1071,7 +1137,33 @@ window.__ModuleLoader__.load({
           h('span', { key: 'peers', className: 'dsh-card-lan-muted' }, fmt(zh.peerCount, { n: peers.length })),
         ]),
         enabled ? null : h('p', { key: 'off', className: 'dsh-card-lan-muted dsh-card-lan-small' }, zh.disabledHint),
-        lastError !== null && lastError !== undefined
+        reconnecting
+          ? h('p', { key: 'reconnecting', className: 'dsh-card-lan-reconnect', role: 'status' }, [
+            h('span', { key: 'dot', className: 'dsh-card-lan-pulse-dot' }),
+            h('span', { key: 'text' }, zh.reconnecting),
+          ])
+          : null,
+        reconnectFailed
+          ? h('div', { key: 'reconnectFailed', className: 'dsh-card-lan-banner is-stale', role: 'status' }, [
+            h('span', { key: 'dot', className: 'dsh-card-lan-pulse-dot' }),
+            h('span', { key: 'text' }, zh.reconnectFailed),
+            h('span', { key: 'detail', className: 'dsh-card-lan-tiny' }, zh.reconnectFailedDetail),
+            h('button', {
+              key: 'rejoin',
+              type: 'button',
+              className: 'dsh-card-lan-button dsh-card-lan-button-small',
+              disabled: busy,
+              onClick: () => void act({ type: 'rejoin' }, zh.noticeRejoin),
+            }, zh.rejoin),
+          ])
+          : null,
+        hostClosed
+          ? h('div', { key: 'hostClosed', className: 'dsh-card-lan-banner is-stale', role: 'status' }, [
+            h('span', { key: 'text' }, zh.hostClosed),
+            h('span', { key: 'detail', className: 'dsh-card-lan-tiny' }, zh.hostClosedDetail),
+          ])
+          : null,
+        genericLastError
           ? h('p', { key: 'error', className: 'dsh-card-lan-error' }, zh.lastError + '：' + lastErrorText(lastError))
           : null,
         snapshot.error !== null
@@ -1370,6 +1462,17 @@ window.__ModuleLoader__.load({
       const staleMs = Math.max(0, asNumber(table.staleMs, 0))
       // Spectators track host liveness exactly like seated players (PROTOCOL §3.1).
       const stale = (role === 'player' || role === 'spectator') && staleMs > STALE_MS
+      // Auto-reconnect state (PROTOCOL §2.5c): a guest may be actively retrying
+      // or may have exhausted its retries and be waiting for a manual rejoin.
+      const reconnecting = data !== null && data.reconnecting === true
+      const overlayLastError = data !== null ? data.lastError : null
+      const overlayLastErrorCode = overlayLastError !== null && overlayLastError !== undefined
+        ? String(overlayLastError)
+        : ''
+      const reconnectFailed = overlayLastErrorCode === 'reconnect-failed'
+      const connectionBroken = reconnecting || reconnectFailed
+      // Per-turn countdown from the host heartbeat; -1 means "not applicable".
+      const turnRemainingMs = asNumber(table.turnRemainingMs, -1)
       const hostOpacity = configRecord !== null && Number.isFinite(configRecord.overlayOpacity)
         ? Math.min(1, Math.max(MIN_OPACITY, Number(configRecord.overlayOpacity)))
         : DEFAULT_OPACITY
@@ -1521,7 +1624,15 @@ window.__ModuleLoader__.load({
       if (isSpectator) {
         hint = zh.spectatorHint
       } else if (phase === 'playing') {
-        hint = myTurn ? zh.yourTurn : (turnNick !== '' ? fmt(zh.waitOthers, { name: turnNick }) : zh.waitHost)
+        if (myTurn) {
+          // The host refreshes turnRemainingMs on every heartbeat; the number
+          // ticks down in place without remounting anything.
+          hint = turnRemainingMs >= 0
+            ? fmt(zh.turnCountdown, { n: Math.max(0, Math.ceil(turnRemainingMs / 1000)) })
+            : zh.yourTurn
+        } else {
+          hint = turnNick !== '' ? fmt(zh.waitOthers, { name: turnNick }) : zh.waitHost
+        }
       } else if (phase === 'idle') {
         hint = role === 'host' ? zh.idleHostHint : zh.waitHostStart
       } else if (phase === 'dealer') {
@@ -1549,10 +1660,14 @@ window.__ModuleLoader__.load({
           onFocus: onFocusIn,
           onBlur: onFocusOut,
         }, [
-          h('span', { key: 'dot', className: 'dsh-card-lan-capsule-dot' + (stale ? ' is-stale' : '') }),
+          h('span', { key: 'dot', className: 'dsh-card-lan-capsule-dot' + (stale || reconnecting || reconnectFailed ? ' is-stale' : '') }),
           h('span', { key: 'text' }, round > 0 ? fmt(zh.capsule, { n: round }) : zh.capsuleIdle),
           h('span', { key: 'phase', className: 'dsh-card-lan-capsule-phase' }, phaseLabel),
-          stale ? h('span', { key: 'stale', className: 'dsh-card-lan-capsule-stale' }, zh.capsuleStale) : null,
+          reconnecting
+            ? h('span', { key: 'reconnect', className: 'dsh-card-lan-capsule-stale' }, zh.capsuleReconnecting)
+            : (reconnectFailed
+              ? h('span', { key: 'reconnectFailed', className: 'dsh-card-lan-capsule-stale' }, zh.reconnectFailed)
+              : (stale ? h('span', { key: 'stale', className: 'dsh-card-lan-capsule-stale' }, zh.capsuleStale) : null)),
           h('span', { key: 'expand', className: 'dsh-card-lan-capsule-hint' }, zh.expand),
         ])
       }
@@ -1604,13 +1719,33 @@ window.__ModuleLoader__.load({
         ]),
       ])
 
-      const staleBanner = stale
-        ? h('div', { key: 'stale', className: 'dsh-card-lan-banner is-stale', role: 'status' }, [
+      // One connection banner, highest priority first: retrying > failed > stale.
+      const connectionBanner = reconnecting
+        ? h('div', { key: 'reconnecting', className: 'dsh-card-lan-banner is-stale', role: 'status' }, [
           h('span', { key: 'dot', className: 'dsh-card-lan-pulse-dot' }),
-          h('span', { key: 'text' }, zh.staleTitle),
-          h('span', { key: 'detail', className: 'dsh-card-lan-tiny' }, fmt(zh.staleDetail, { s: Math.round(staleMs / 1000) })),
+          h('span', { key: 'text' }, zh.reconnecting),
         ])
-        : null
+        : reconnectFailed
+          ? h('div', { key: 'reconnectFailed', className: 'dsh-card-lan-banner is-stale', role: 'status' }, [
+            h('span', { key: 'dot', className: 'dsh-card-lan-pulse-dot' }),
+            h('span', { key: 'text' }, zh.reconnectFailed),
+            h('span', { key: 'detail', className: 'dsh-card-lan-tiny' },
+              stale ? fmt(zh.staleDetail, { s: Math.round(staleMs / 1000) }) : zh.reconnectFailedDetail),
+            h('button', {
+              key: 'rejoin',
+              type: 'button',
+              className: 'dsh-card-lan-button dsh-card-lan-button-small',
+              disabled: busy,
+              onClick: () => void act({ type: 'rejoin' }, zh.noticeRejoin),
+            }, zh.rejoin),
+          ])
+          : stale
+            ? h('div', { key: 'stale', className: 'dsh-card-lan-banner is-stale', role: 'status' }, [
+              h('span', { key: 'dot', className: 'dsh-card-lan-pulse-dot' }),
+              h('span', { key: 'text' }, zh.staleTitle),
+              h('span', { key: 'detail', className: 'dsh-card-lan-tiny' }, fmt(zh.staleDetail, { s: Math.round(staleMs / 1000) })),
+            ])
+            : null
 
       const dealerBlock = h('div', { key: 'dealer', className: 'dsh-card-lan-dealer' }, [
         h('div', { key: 'head', className: 'dsh-card-lan-row-head' }, [
@@ -1656,14 +1791,14 @@ window.__ModuleLoader__.load({
           key: 'hit',
           type: 'button',
           className: 'dsh-card-lan-button dsh-card-lan-button-primary',
-          disabled: busy || !myTurn,
+          disabled: busy || !myTurn || connectionBroken,
           onClick: () => void act({ type: 'hit' }),
         }, zh.hit))
         actionNodes.push(h('button', {
           key: 'stand',
           type: 'button',
           className: 'dsh-card-lan-button',
-          disabled: busy || !myTurn,
+          disabled: busy || !myTurn || connectionBroken,
           onClick: () => void act({ type: 'stand' }),
         }, zh.stand))
       }
@@ -1704,7 +1839,7 @@ window.__ModuleLoader__.load({
         onBlur: onFocusOut,
       }, [
         head,
-        staleBanner,
+        connectionBanner,
         h('div', { key: 'body', className: 'dsh-card-lan-body' }, bodyChildren),
         noticeNode,
         snapshot.error !== null
@@ -1764,6 +1899,8 @@ window.__ModuleLoader__.load({
       '.dsh-card-lan-dot.is-on{background:var(--dsw-alias-state-success-primary,#22c55e);box-shadow:0 0 0 3px rgba(34,197,94,.16)}',
       '.dsh-card-lan-dot.is-off{background:var(--dsw-alias-state-error-primary,#ef4444)}',
       '.dsh-card-lan-error{margin:0;color:var(--dsw-alias-state-error-primary,#f87171);font-size:12px;word-break:break-word}',
+      '.dsh-card-lan-reconnect{margin:0;display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#fbbf24}',
+      '.dsh-card-lan-banner .dsh-card-lan-button{margin-left:auto}',
       '.dsh-card-lan-notice{margin:0;color:var(--dsw-alias-label-secondary,#94a3b8);font-size:12px;word-break:break-word}',
       '.dsh-card-lan-notice.is-error{color:var(--dsw-alias-state-error-primary,#f87171)}',
       '.dsh-card-lan-identity{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:10px;',

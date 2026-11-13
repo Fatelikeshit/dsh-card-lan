@@ -272,6 +272,37 @@ test('two instances: discovery, join, a round to result, leave, routes', async (
   })).ok, true)
   await waitFor('spectator rejected when watch is off', () => b.view().lastError === 'join-watch-closed', 8000)
 
+  // --- v3: turn timeout ---------------------------------------------------
+  patched = await cfg({ turnTimeout: 999 })
+  assert.equal(JSON.parse(patched.body).error, 'invalid-turn-timeout')
+  patched = await cfg({ turnTimeout: 1, passwordEnabled: false, password: '', spectatorEnabled: true })
+  assert.equal(patched.status, 200)
+  assert.equal(a.view().config.turnTimeout, 1)
+
+  assert.equal((await b.action({ type: 'join', hostIp: '127.0.0.1', hostPort: PORT_A })).ok, true)
+  await waitFor('guest seated for timeout round', () => {
+    const table = b.view().table
+    return table !== null && table.role === 'player'
+  }, 8000)
+  assert.equal((await a.action({ type: 'start' })).ok, true)
+  await waitFor('turn countdown is published', () => {
+    const table = a.view().table
+    return table !== null && table.phase === 'playing' && Number.isFinite(table.turnRemainingMs)
+  }, 6000)
+  // Nobody acts: the host stands both players out after one second each and
+  // the dealer settles the round.
+  await waitFor('round settles through auto-stand', () => a.view().table.phase === 'result', 12000)
+  assert.equal(a.view().table.log.some((line) => String(line).includes('超时')), true)
+
+  // --- v3: host closes the table and the guest is told --------------------
+  assert.equal((await a.action({ type: 'close' })).ok, true)
+  await waitFor('guest sees the table closed', () => {
+    const view = b.view()
+    return view.table === null && view.lastError === 'host-closed'
+  }, 6000)
+  assert.equal(b.view().reconnecting, false)
+  assert.equal(a.view().table, null)
+
   } finally {
     a.dispose()
     b.dispose()
