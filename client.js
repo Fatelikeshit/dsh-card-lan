@@ -25,6 +25,10 @@
  * shared shell (drag, size, fade, opacity, hide shortcut, reconnect banners)
  * is identical for both.
  *
+ * v5 adds 跑得快: same card-table layout as Dou Dizhu minus bidding/landlord,
+ * with the stricter "must beat it if you can" pass rule reported through the
+ * shared `must-play` error code.
+ *
  * @module dsh-card-lan/client
  */
 
@@ -74,12 +78,16 @@ window.__ModuleLoader__.load({
     const STATUSES = { playing: '要牌中', stand: '停牌', bust: '爆牌', blackjack: '黑杰克' }
     const RESULTS = { win: '赢', lose: '输', push: '平' }
 
-    /** Game kinds (PROTOCOL §7.1); anything unknown falls back to blackjack. */
-    const GAME_LABELS = { blackjack: '21 点', doudizhu: '斗地主' }
+    /** Game kinds (PROTOCOL §7.1/§7.7); anything unknown falls back to blackjack. */
+    const GAME_LABELS = { blackjack: '21 点', doudizhu: '斗地主', paodekuai: '跑得快' }
+    const GAME_ORDER = ['blackjack', 'doudizhu', 'paodekuai']
     const DEFAULT_GAME = 'blackjack'
 
     /** Dou Dizhu phases (PROTOCOL §7.3): idle is the pre-deal table state. */
     const DDZ_PHASES = { idle: '等待开始', bidding: '叫地主中', playing: '出牌中', result: '本局结束' }
+
+    /** Pao De Kuai phases (PROTOCOL §7.6): no bidding, no landlord. */
+    const PDK_PHASES = { idle: '等待开始', playing: '出牌中', result: '本局结束' }
 
     /** Dou Dizhu rank order: 3 < 4 < … < 2 < 小王 < 大王. */
     const DDZ_RANK_ORDER = {
@@ -308,6 +316,11 @@ window.__ModuleLoader__.load({
       ddzScores: '胜 {win} · 负 {lose}',
       ddzCountdown: '剩 {n} 秒',
       ddzWaitHostState: '等待房主的状态同步…',
+      pkTitle: '跑得快 · 第 {n} 局',
+      pkTitleIdle: '跑得快 · 未开局',
+      pkCapsule: '跑得快 · 第 {n} 局',
+      pkCapsuleIdle: '跑得快 · 未开局',
+      pkMustPlay: '这手必须管上，不能不要',
     }
 
     /** Tiny `{name}` interpolator for the copy above. */
@@ -390,9 +403,9 @@ window.__ModuleLoader__.load({
       return { text: rank + glyph, red: RED_SUITS[suit] === true }
     }
 
-    /** Normalize an untrusted game id (PROTOCOL §7.1). */
+    /** Normalize an untrusted game id (PROTOCOL §7.1/§7.7). */
     function gameOf(value) {
-      return value === 'doudizhu' ? 'doudizhu' : DEFAULT_GAME
+      return value === 'doudizhu' || value === 'paodekuai' ? value : DEFAULT_GAME
     }
 
     /** Human label for one game id. */
@@ -400,10 +413,29 @@ window.__ModuleLoader__.load({
       return GAME_LABELS[gameOf(value)]
     }
 
+    /** True for the two card-game tables that share the Doudizhu-style layout. */
+    function isCardGameId(game) {
+      return game === 'doudizhu' || game === 'paodekuai'
+    }
+
     /** Phase label for the active game. */
     function phaseLabelFor(game, phase) {
-      const labels = game === 'doudizhu' ? DDZ_PHASES : PHASES
+      const labels = game === 'doudizhu' ? DDZ_PHASES : (game === 'paodekuai' ? PDK_PHASES : PHASES)
       return labels[phase] !== undefined ? labels[phase] : phase
+    }
+
+    /** Overlay title for the active game ("21 点 · 第 2 局" etc.). */
+    function gameTitleOf(game, round) {
+      if (game === 'doudizhu') return round > 0 ? fmt(zh.ddzTitle, { n: round }) : zh.ddzTitleIdle
+      if (game === 'paodekuai') return round > 0 ? fmt(zh.pkTitle, { n: round }) : zh.pkTitleIdle
+      return round > 0 ? fmt(zh.tableTitle, { n: round }) : zh.tableTitleIdle
+    }
+
+    /** Minimised-capsule title for the active game. */
+    function gameCapsuleTitleOf(game, round) {
+      if (game === 'doudizhu') return round > 0 ? fmt(zh.ddzCapsule, { n: round }) : zh.ddzCapsuleIdle
+      if (game === 'paodekuai') return round > 0 ? fmt(zh.pkCapsule, { n: round }) : zh.pkCapsuleIdle
+      return round > 0 ? fmt(zh.capsule, { n: round }) : zh.capsuleIdle
     }
 
     /** Rank order of one Dou Dizhu card code (unknown codes sort first). */
@@ -479,13 +511,16 @@ window.__ModuleLoader__.load({
      * Turn a host error code into readable Chinese; unknown codes and network
      * failures are shown verbatim after a human prefix, never swallowed.
      */
-    function errorText(error) {
+    function errorText(error, game) {
       if (error === null || error === undefined) return ''
       const code = typeof error === 'string'
         ? error
         : (typeof error.message === 'string' ? error.message : String(error))
       const trimmed = code.trim()
       if (trimmed === '') return ''
+      // Pao De Kuai's must-play rule reads differently from Doudizhu's: there
+      // it means "you can beat this, so you must" (PROTOCOL §7.6).
+      if (trimmed === 'must-play' && game === 'paodekuai') return zh.pkMustPlay
       return ERROR_TEXT[trimmed] !== undefined ? ERROR_TEXT[trimmed] : fmt(zh.actionFailedWith, { reason: trimmed })
     }
 
@@ -754,11 +789,15 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Dou Dizhu table body (PROTOCOL §7.3/§7.5). A pure renderer: every value
-     * comes from the polled view, every write goes back through a callback.
-     * Returns the pieces the shared overlay shell splices in.
+     * Card-table body shared by Dou Dizhu (PROTOCOL §7.3) and Pao De Kuai
+     * (§7.6): seats + last play + hand + play/pass. `props.game` switches the
+     * game-specific extras (bidding + landlord only exist in Dou Dizhu).
+     * A pure renderer: every value comes from the polled view, every write
+     * goes back through a callback.
      */
-    function buildDoudizhuContent(props) {
+    function buildCardGameContent(props) {
+      const game = props.game === 'paodekuai' ? 'paodekuai' : 'doudizhu'
+      const isPdk = game === 'paodekuai'
       const role = props.role
       const isSpectator = props.isSpectator === true
       const phase = props.phase
@@ -784,11 +823,11 @@ window.__ModuleLoader__.load({
         return undefined
       }
 
-      /* ---------- header extras: game pill, landlord, countdown ---------- */
+      /* ---------- header extras: game pill, landlord (DDZ), countdown ---------- */
       const headExtras = [
-        h('span', { key: 'game', className: 'dsh-card-lan-pill is-game-doudizhu' }, GAME_LABELS.doudizhu),
+        h('span', { key: 'game', className: 'dsh-card-lan-pill is-game-' + game }, GAME_LABELS[game]),
       ]
-      if (landlordPlayer !== undefined) {
+      if (!isPdk && landlordPlayer !== undefined) {
         headExtras.push(h('span', { key: 'landlord', className: 'dsh-card-lan-tag is-landlord' },
           fmt(zh.ddzLandlordMark, { name: asString(landlordPlayer.nick, zh.ddzLandlord) })))
       }
@@ -916,27 +955,32 @@ window.__ModuleLoader__.load({
         ]))
       }
 
-      /* ---------- result banner: landlord/farmer side + my win/lose ---------- */
+      /* ---------- result banner: landlord/farmer side (DDZ) or my win/lose ---------- */
       if (phase === 'result') {
-        const landlordWon = landlordPlayer !== undefined && asString(landlordPlayer.result, '') === 'win'
-        const sideText = landlordPlayer === undefined
-          ? zh.ddzRoundOver
-          : (landlordWon ? zh.ddzLandlordWin : zh.ddzFarmerWin)
         const mine = me !== undefined ? asString(me.result, '') : ''
         const mineText = mine === 'win' ? zh.ddzIWin : (mine === 'lose' ? zh.ddzILose : '')
-        bodyNodes.push(h('div', {
-          key: 'result',
-          className: 'dsh-card-lan-banner ' + (mine === 'win' ? 'is-win' : (mine === 'lose' ? 'is-lose' : 'is-none')),
-          role: 'status',
-        }, [
-          h('span', { key: 'side' }, sideText),
-          mineText !== '' ? h('span', { key: 'mine', className: 'dsh-card-lan-ddz-result-mine' }, mineText) : null,
-        ]))
+        const bannerClass = 'dsh-card-lan-banner '
+          + (mine === 'win' ? 'is-win' : (mine === 'lose' ? 'is-lose' : 'is-none'))
+        if (isPdk) {
+          // Pao De Kuai has no landlord: only my own win/lose is meaningful.
+          bodyNodes.push(h('div', { key: 'result', className: bannerClass, role: 'status' }, [
+            h('span', { key: 'mine' }, mineText !== '' ? mineText : zh.ddzRoundOver),
+          ]))
+        } else {
+          const landlordWon = landlordPlayer !== undefined && asString(landlordPlayer.result, '') === 'win'
+          const sideText = landlordPlayer === undefined
+            ? zh.ddzRoundOver
+            : (landlordWon ? zh.ddzLandlordWin : zh.ddzFarmerWin)
+          bodyNodes.push(h('div', { key: 'result', className: bannerClass, role: 'status' }, [
+            h('span', { key: 'side' }, sideText),
+            mineText !== '' ? h('span', { key: 'mine', className: 'dsh-card-lan-ddz-result-mine' }, mineText) : null,
+          ]))
+        }
       }
 
       /* ---------- buttons ---------- */
       const actionNodes = []
-      if (phase === 'bidding' && activeTurn) {
+      if (!isPdk && phase === 'bidding' && activeTurn) {
         actionNodes.push(h('button', {
           key: 'bid',
           type: 'button',
@@ -1588,8 +1632,7 @@ window.__ModuleLoader__.load({
             disabled: busy || !enabled,
             onChange: (event) => setGameDraft(gameOf(event.target.value)),
           }, [
-            h('option', { key: 'blackjack', value: 'blackjack' }, GAME_LABELS.blackjack),
-            h('option', { key: 'doudizhu', value: 'doudizhu' }, GAME_LABELS.doudizhu),
+            ...GAME_ORDER.map((id) => h('option', { key: id, value: id }, GAME_LABELS[id])),
           ])
           : null,
         !hostOpen && role === null
@@ -1855,6 +1898,8 @@ window.__ModuleLoader__.load({
       const isSpectator = role === 'spectator'
       const game = gameOf(table.game)
       const isDdz = game === 'doudizhu'
+      const isPdk = game === 'paodekuai'
+      const isCardGame = isCardGameId(game)
       const phase = asString(table.phase, 'idle')
       const round = Math.max(0, asNumber(table.round, 0))
       const players = asArray(table.players).filter((slot) => asObject(slot) !== null)
@@ -1915,14 +1960,14 @@ window.__ModuleLoader__.load({
         .filter((line) => line !== '')
         .slice(-3)
 
-      // Dou Dizhu-only view fields (PROTOCOL §7.3); ignored for blackjack.
+      // Card-game view fields (PROTOCOL §7.3/§7.6); ignored for blackjack.
       const landlordNode = isDdz ? asString(table.landlord, '') : ''
       const landlordPlayer = isDdz && landlordNode !== ''
         ? players.find((slot) => asString(slot.node, '') === landlordNode)
         : undefined
-      const ddzMyCards = isDdz ? sortDdzCards(asArray(table.myCards)) : []
-      const ddzLastPlay = isDdz ? asObject(table.lastPlay) : null
-      const ddzMustPlay = isDdz && table.mustPlay === true
+      const cardMyCards = isCardGame ? sortDdzCards(asArray(table.myCards)) : []
+      const cardLastPlay = isCardGame ? asObject(table.lastPlay) : null
+      const cardMustPlay = isCardGame && table.mustPlay === true
       const myScore = myNode !== '' && scoreMap !== null ? scoreMap[myNode] : null
 
       const showNotice = (text, isError) => {
@@ -1935,11 +1980,11 @@ window.__ModuleLoader__.load({
         const result = await store.action(body)
         setBusy(false)
         if (result.ok === true) showNotice(successText === undefined ? '' : successText, false)
-        else showNotice(errorText(result.error) || zh.actionFailed, true)
+        else showNotice(errorText(result.error, game) || zh.actionFailed, true)
         return result.ok === true
       }
 
-      /** Dou Dizhu writes (PROTOCOL §7.3): bid / play / pass / start. */
+      /** Card-game writes (PROTOCOL §7.3/§7.6): bid / play / pass / start. */
       const toggleCard = (card) => {
         setSelectedCards((current) => (current.indexOf(card) === -1
           ? current.concat([card])
@@ -2055,8 +2100,9 @@ window.__ModuleLoader__.load({
         return ''
       })()
 
-      const ddz = isDdz
-        ? buildDoudizhuContent({
+      const cardGame = isCardGame
+        ? buildCardGameContent({
+          game,
           role,
           isSpectator,
           phase,
@@ -2065,9 +2111,9 @@ window.__ModuleLoader__.load({
           turnNode,
           myNode,
           turnNick,
-          lastPlay: ddzLastPlay,
-          mustPlay: ddzMustPlay,
-          myCards: ddzMyCards,
+          lastPlay: cardLastPlay,
+          mustPlay: cardMustPlay,
+          myCards: cardMyCards,
           selectedCards,
           toggleCard,
           landlordPlayer,
@@ -2083,8 +2129,8 @@ window.__ModuleLoader__.load({
         : null
 
       let hint = ''
-      if (isDdz) {
-        hint = ddz.hint
+      if (isCardGame) {
+        hint = cardGame.hint
       } else if (isSpectator) {
         hint = zh.spectatorHint
       } else if (phase === 'playing') {
@@ -2125,9 +2171,7 @@ window.__ModuleLoader__.load({
           onBlur: onFocusOut,
         }, [
           h('span', { key: 'dot', className: 'dsh-card-lan-capsule-dot' + (stale || reconnecting || reconnectFailed ? ' is-stale' : '') }),
-          h('span', { key: 'text' }, isDdz
-            ? (round > 0 ? fmt(zh.ddzCapsule, { n: round }) : zh.ddzCapsuleIdle)
-            : (round > 0 ? fmt(zh.capsule, { n: round }) : zh.capsuleIdle)),
+          h('span', { key: 'text' }, gameCapsuleTitleOf(game, round)),
           h('span', { key: 'phase', className: 'dsh-card-lan-capsule-phase' }, phaseLabel),
           reconnecting
             ? h('span', { key: 'reconnect', className: 'dsh-card-lan-capsule-stale' }, zh.capsuleReconnecting)
@@ -2148,11 +2192,9 @@ window.__ModuleLoader__.load({
           h('span', {
             key: 'title',
             className: 'dsh-card-lan-title',
-          }, isDdz
-            ? (round > 0 ? fmt(zh.ddzTitle, { n: round }) : zh.ddzTitleIdle)
-            : (round > 0 ? fmt(zh.tableTitle, { n: round }) : zh.tableTitleIdle)),
+          }, gameTitleOf(game, round)),
           h('span', { key: 'phase', className: 'dsh-card-lan-pill is-' + phase }, phaseLabel),
-          ...(isDdz ? ddz.headExtras : []),
+          ...(isCardGame ? cardGame.headExtras : []),
           isSpectator
             ? h('span', { key: 'spectator', className: 'dsh-card-lan-pill is-spectator' }, zh.spectatorBadge)
             : null,
@@ -2281,14 +2323,14 @@ window.__ModuleLoader__.load({
         : null
 
       const bodyChildren = []
-      if (isDdz) {
-        for (const node of ddz.bodyNodes) bodyChildren.push(node)
+      if (isCardGame) {
+        for (const node of cardGame.bodyNodes) bodyChildren.push(node)
       } else {
         bodyChildren.push(dealerBlock)
         for (const row of rows) bodyChildren.push(row)
         if (bjResultBanner !== null) bodyChildren.push(bjResultBanner)
       }
-      const finalActions = isDdz ? ddz.actionNodes : bjActionNodes
+      const finalActions = isCardGame ? cardGame.actionNodes : bjActionNodes
       if (finalActions.length > 0) {
         bodyChildren.push(h('div', { key: 'actions', className: 'dsh-card-lan-actions' }, finalActions))
       }
@@ -2483,6 +2525,8 @@ window.__ModuleLoader__.load({
       '.dsh-card-lan-capsule-stale{color:var(--dsw-alias-state-error-primary,#f87171);font-weight:600}',
       '.dsh-card-lan-capsule-hint{color:var(--dsw-alias-label-secondary,#94a3b8);opacity:.75}',
       '.dsh-card-lan-tag.is-game-doudizhu{background:rgba(245,158,11,.16);border-color:rgba(245,158,11,.4);color:#fbbf24}',
+      '.dsh-card-lan-tag.is-game-paodekuai{background:rgba(34,211,238,.14);border-color:rgba(34,211,238,.4);color:#22d3ee}',
+      '.dsh-card-lan-pill.is-game-paodekuai{background:rgba(34,211,238,.14);border-color:rgba(34,211,238,.45);color:#22d3ee}',
       '.dsh-card-lan-tag.is-game-blackjack{background:rgba(148,163,184,.14);border-color:rgba(148,163,184,.3);',
       'color:var(--dsw-alias-label-secondary,#94a3b8)}',
       '.dsh-card-lan-pill.is-game-doudizhu{background:rgba(245,158,11,.16);border-color:rgba(245,158,11,.45);color:#fbbf24}',

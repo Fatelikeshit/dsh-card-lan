@@ -324,9 +324,9 @@ window.__ModuleLoader__.load({
 
 ### 7.1 配置与开桌
 
-- `config.game`：`"blackjack" | "doudizhu"`，默认 `"blackjack"`，表示下次「创建牌桌」的玩法（持久化）。
+- `config.game`：`"blackjack" | "doudizhu" | "paodekuai"`，默认 `"blackjack"`，表示下次「创建牌桌」的玩法（持久化）。
 - `view.config.game` 暴露。
-- `action { "type":"open", "game"?: "blackjack"|"doudizhu" }`：带 `game` 时先写回 `config.game` 再开桌；非法 → `{ok:false,error:"invalid-game"}`。不带则用 `config.game`。
+- `action { "type":"open", "game"?: "blackjack"|"doudizhu"|"paodekuai" }`：带 `game` 时先写回 `config.game` 再开桌；非法 → `{ok:false,error:"invalid-game"}`。不带则用 `config.game`。
 - `hello.table` 增加 `game` 字段，发现列表按玩法显示（21 点 / 斗地主）。
 - `view.table.game` 必填（两种玩法都带）；21 点的 table 结构不变。
 
@@ -407,9 +407,50 @@ window.__ModuleLoader__.load({
 - 引擎不碰 socket/HTTP/定时器，所有输入先由宿主校验来源（是已入座玩家、轮到它）。
 - `lib/engine.js` 保留给 21 点（或移入 games 目录后由宿主 import），斗地主不得复用 21 点的计点逻辑。
 
-### 7.5 浏览器半边（多玩法）
+### 7.6 跑得快（v5）
 
-- 大厅「创建牌桌」旁加玩法选择：`21 点` / `斗地主`（默认取 `view.config.game`），点创建时 `action {type:"open", game}`；发现列表显示玩法标签。
+3 人、48 张：`3..A` × 4 花色（去掉 2 和大小王），每人 16 张；大小顺序 `3<4<…<10<J<Q<K<A`。
+
+`view.table`（`game === "paodekuai"`）：
+
+```json
+{
+  "game": "paodekuai",
+  "role": "host|player|spectator",
+  "hostNode": "uuid",
+  "phase": "idle|playing|result",
+  "round": 2,
+  "turn": "uuid|null",
+  "myCards": ["3S", "4D", "AS"],
+  "players": [
+    { "node": "uuid", "nick": "甲", "self": true, "count": 16, "status": "playing|out", "result": null }
+  ],
+  "lastPlay": { "node": "uuid", "cards": ["AS","AH"], "label": "对 A" },
+  "mustPlay": false,
+  "log": ["..."],
+  "scores": { "uuid": { "win": 0, "lose": 0 } },
+  "staleMs": 0,
+  "turnRemainingMs": 30000
+}
+```
+
+流程与规则：
+- 发牌后 `phase="playing"`；**持有黑桃 3（`3S`）的玩家先出**（每局洗牌后按手牌判定）。
+- 牌型：单、对、三张、三带二（三张 + 任意对子）、顺子（≥5 张连续，A 可作最大，不含 2/王——本版无 2/王）、连对（≥2 对连续）、飞机（≥2 组连续三张，**不带翅膀**）、炸弹（四张同点）；四带二、飞机带翅膀 → `bad-cards`。
+- 比较：同型同张数比主牌点数；炸弹压一切非炸弹，炸弹之间比点数。
+- **必须管上**：当前玩家能压过 `lastPlay` 时必须出牌；只有压不过时才允许 `pass`（否则返回 `must-play`）。领出（`lastPlay === null`）可出任意合法牌。
+- 其余人压不过（全部 pass）后：`lastPlay` 清空、出牌权回到最后出牌者（`mustPlay=true`）。
+- 先出完者胜（`win+1`），其余人 `lose+1`。
+- 超时（房主 `turnTimeout`）：必须出 → 自动出「能压过的最小合法牌」，压不过则自动 `pass`；领出 → 自动出最小单张。
+- 掉线/离开：局中离开者手牌弃掉并移除；若只剩 1 人 → 其直接胜；idle/result 只移座位。
+
+动作：`{ "type":"play", "cards":[...] }` / `{ "type":"pass" }`；错误码 `not-your-turn`、`bad-phase`、`bad-cards`、`must-play`。
+
+界面照斗地主牌桌复用（无叫地主/地主农民）：顶部局数、阶段、回合倒计时；其他玩家昵称、剩余张数、已出完、回合高亮；中间 `lastPlay` 与「轮到你领出」；我的手牌可点选，`出牌` / `不要`（`mustPlay` 时禁用；能管必须管的错误用中文提示）；结算横幅「你赢了/你输了」；观战无手牌无按钮。
+
+### 7.7 浏览器半边（多玩法续）
+
+- 大厅「创建牌桌」旁加玩法选择：`21 点` / `斗地主` / `跑得快`（默认取 `view.config.game`），点创建时 `action {type:"open", game}`；发现列表显示玩法标签。
 - `view.table.game === "doudizhu"` 时渲染斗地主牌桌（不能用 21 点 UI）：
   - 顶部：局数、阶段（叫地主中 / 出牌中 / 本局结束）、地主标记、回合倒计时；
   - 其他人：昵称、地主/农民标记、剩余张数、当前回合高亮、已出完；
