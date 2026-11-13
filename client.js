@@ -258,6 +258,7 @@ window.__ModuleLoader__.load({
       stand: '停牌',
       minimize: '最小化',
       expand: '展开',
+      capsuleDragHint: '拖动移动 · 点击展开',
       leave: '离开',
       staleTitle: '房主失联，等待重连…',
       staleDetail: '{s} 秒没有收到房主状态',
@@ -1861,6 +1862,8 @@ window.__ModuleLoader__.load({
       const [selectedCards, setSelectedCards] = useState([])
       const [showSettings, setShowSettings] = useState(false)
       const settingsTimer = useRef(null)
+      // A drag that ends over the capsule must not also expand it.
+      const suppressCapsuleClick = useRef(false)
 
       // The local Dou Dizhu selection is invalidated whenever the board, the
       // turn or my hand changes (a play landed, the round moved on, re-deal).
@@ -2073,7 +2076,7 @@ window.__ModuleLoader__.load({
       }
 
       /** Title-bar drag: pointer events, clamped to the viewport. */
-      const startDrag = (event) => {
+      const startDrag = (event, options = {}) => {
         if (event === null || event === undefined) return
         if (event.button !== undefined && event.button !== 0) return
         const target = event.target
@@ -2125,12 +2128,15 @@ window.__ModuleLoader__.load({
           dragState.current = null
           setDragging(false)
           if (state.moved) schedulePositionSave(state.lastX, state.lastY)
+          suppressCapsuleClick.current = state.moved
         }
         state.detach = detach
         dragState.current = state
         setDragging(true)
         setHovered(true)
-        if (typeof event.preventDefault === 'function') event.preventDefault()
+        // The capsule also expands on click, so it must keep its compatibility
+        // click events (only the title bar cancels the default gesture).
+        if (options.preventDefault !== false && typeof event.preventDefault === 'function') event.preventDefault()
         window.addEventListener('pointermove', move)
         window.addEventListener('pointerup', up)
         window.addEventListener('pointercancel', up)
@@ -2197,12 +2203,18 @@ window.__ModuleLoader__.load({
 
       if (minimized) {
         return h('div', {
-          className: 'dsh-card-lan-capsule',
+          className: 'dsh-card-lan-capsule' + (dragging ? ' is-dragging' : ''),
           style: overlayStyle,
           role: 'button',
           tabIndex: 0,
-          title: zh.expand,
-          onClick: () => setMinimized(false),
+          title: zh.capsuleDragHint,
+          onPointerDown: (event) => startDrag(event, { preventDefault: false }),
+          onClick: () => {
+            const suppressed = suppressCapsuleClick.current
+            suppressCapsuleClick.current = false
+            if (suppressed) return
+            setMinimized(false)
+          },
           onKeyDown: (event) => {
             if (event.key === 'Enter' || event.key === ' ') {
               event.preventDefault()
@@ -2640,12 +2652,13 @@ window.__ModuleLoader__.load({
       '.dsh-card-lan-log-line{font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary,#94a3b8);',
       'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dsh-card-lan-capsule{position:fixed;right:16px;bottom:96px;z-index:2147482200;display:inline-flex;',
-      'align-items:center;gap:8px;max-width:calc(100vw - 32px);padding:8px 14px;border-radius:999px;cursor:pointer;',
+      'align-items:center;gap:8px;max-width:calc(100vw - 32px);padding:8px 14px;border-radius:999px;cursor:grab;touch-action:none;',
       'background:var(--dsw-alias-bg-overlay,rgba(15,23,42,.94));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.35));',
       'box-shadow:0 10px 28px rgba(2,6,23,.4);color:var(--dsw-alias-label-primary,#e2e8f0);font-size:12px;line-height:1.5;',
       'backdrop-filter:blur(10px);pointer-events:auto;user-select:none;-webkit-user-select:none;',
       'opacity:var(--dsh-card-lan-opacity,1);transition:opacity .18s ease}',
       '.dsh-card-lan-capsule:hover{border-color:var(--dsw-alias-border-l2,rgba(148,163,184,.65))}',
+      '.dsh-card-lan-capsule.is-dragging{cursor:grabbing}',
       '.dsh-card-lan-capsule:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:2px}',
       '.dsh-card-lan-button:focus-visible,.dsh-card-lan-input:focus-visible,.dsh-card-lan-range:focus-visible{',
       'outline:2px solid var(--dsw-alias-brand-primary,#4d6bfe);outline-offset:1px}',
