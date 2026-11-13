@@ -170,10 +170,11 @@ window.__ModuleLoader__.load({
       inviteCopied: '已复制邀请：{code}',
       inviteCopyFailed: '复制失败，请手动复制：{code}',
       invitePlaceholder: '粘贴朋友发来的邀请',
-      applyInvite: '填入',
-      inviteApplied: '已填入邀请：房间「{room}」、端口 {port}，点「保存」生效。',
+      applyInvite: '应用',
+      inviteApplied: '已应用邀请：房间「{room}」、端口 {port}（已保存）',
+      inviteApplyFailed: '{error}；已填入表单，可到「设置」页签修正后保存。',
       inviteInvalid: '无法识别的邀请，需要包含房间名和端口（1024–65535）。',
-      inviteHint: '复制出的格式是 DSH-CARD-LAN|房间名|端口；粘贴后点「填入」，再点保存。',
+      inviteHint: '复制出的格式是 DSH-CARD-LAN|房间名|端口；粘贴后点「应用」会直接保存，无需再去设置页保存。',
       nick: '我的昵称',
       nickHint: '牌桌上别人看到的名字，1–24 个字符。',
       roomSettingsLabel: '房间设置（开桌时生效）',
@@ -1447,7 +1448,7 @@ window.__ModuleLoader__.load({
         await act(body, zh.noticeJoin)
       }
 
-      /** Invite helpers (PROTOCOL §7.10): copy/paste room+port, no auto-PATCH. */
+      /** Invite helpers (PROTOCOL §7.10): copy the code, or apply+save it. */
       const inviteCode = inviteCodeOf(form !== null ? form.room : '', form !== null ? form.port : '')
 
       const copyInvite = async () => {
@@ -1458,7 +1459,11 @@ window.__ModuleLoader__.load({
         else showNotice(fmt(zh.inviteCopyFailed, { code }), true)
       }
 
-      const applyInvite = () => {
+      /**
+       * Apply one pasted invite: fill the form first, then PATCH only
+       * { room, port } so other unsaved drafts are never committed by accident.
+       */
+      const applyInvite = async () => {
         if (form === null) return
         const parsed = parseInvite(invitePaste)
         if (parsed === null) {
@@ -1467,7 +1472,24 @@ window.__ModuleLoader__.load({
         }
         setForm((current) => (current === null ? current : { ...current, room: parsed.room, port: parsed.port }))
         setManual((current) => ({ ...current, port: String(parsed.port) }))
-        showNotice(fmt(zh.inviteApplied, { room: parsed.room, port: parsed.port }), false)
+        setBusy(true)
+        showNotice('')
+        const result = await store.configure({ room: parsed.room, port: parsed.port })
+        setBusy(false)
+        if (result.ok !== true) {
+          // Keep the filled draft so the user can fix it on the 设置 tab.
+          showNotice(fmt(zh.inviteApplyFailed, { error: errorText(result.error) || zh.saveFailed }), true)
+          return
+        }
+        // Converge on whatever the host accepted (it may normalise values).
+        const savedConfig = result.config !== undefined && result.config !== null
+          ? asObject(result.config)
+          : null
+        const finalRoom = savedConfig !== null ? asString(savedConfig.room, parsed.room) : parsed.room
+        const finalPort = savedConfig !== null ? asNumber(savedConfig.port, parsed.port) : parsed.port
+        setForm((current) => (current === null ? current : { ...current, room: finalRoom, port: finalPort }))
+        setManual((current) => ({ ...current, port: String(finalPort) }))
+        showNotice(fmt(zh.inviteApplied, { room: finalRoom, port: finalPort }), false)
       }
 
       const head = h('div', { key: 'head', className: 'dsh-card-lan-lobby-head' }, [

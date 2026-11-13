@@ -485,7 +485,7 @@ window.__ModuleLoader__.load({
 纯客户端功能，不新增宿主字段或接口；大厅网络设置（房间名 / UDP 端口）下方加「邀请」块：
 
 - **「复制房间名+端口」**：生成 `DSH-CARD-LAN|<room>|<port>` 写入剪贴板（`navigator.clipboard.writeText`，不可用时回退临时 `textarea` + `document.execCommand('copy')`）；成功 notice 显示复制内容，失败提示手动复制。
-- **粘贴框 + 「填入」**：接受 `DSH-CARD-LAN|room|port`，也容忍 `房间名 端口`、`房间名,端口`、`房间名；端口` 等写法；解析成功把 room/port 填进表单（端口同时同步到手动加入框），提示「点保存生效」；失败给出格式要求（端口 1024–65535，房间名 1–32 字符）。粘贴只填表单，不自动 PATCH 配置。
+- **粘贴框 + 「填入」**：接受 `DSH-CARD-LAN|room|port`，也容忍 `房间名 端口`、`房间名,端口`、`房间名；端口` 等写法；解析成功把 room/port 填进表单（端口同时同步到手动加入框），并**直接 `POST /api/card-lan/config {room,port}` 应用保存**（不要求用户再切「设置」页签点保存）；保存成功 notice「已应用邀请：房间「{room}」、端口 {port}（已保存）」；保存失败（如 invalid-room / invalid-port / 端口占用）显示错误且表单保留刚填入的值，方便去「设置」修正；解析失败给出格式要求（端口 1024–65535，房间名 1–32 字符）。
 
 ### 7.11 大厅页签（v6.5）
 
