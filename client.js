@@ -166,7 +166,7 @@ window.__ModuleLoader__.load({
       spectatorEnabled: '允许观战',
       spectatorEnabledHint: '开启后别人可以不占座位、只看牌局。',
       fillBots: '人机补位（斗地主/跑得快）',
-      fillBotsHint: '房主开始本局时用机器人补满 3 个座位；21 点不受影响。',
+      fillBotsHint: '按已入座真人自动补足 3 人；后加入的真人会顶掉机器人；21 点不受影响。',
       botTag: '🤖 机器人',
       turnTimeout: '回合超时（秒）',
       turnTimeoutHint: '0–300 秒，0 表示关闭；超时房主会自动替当前玩家停牌。默认 45。',

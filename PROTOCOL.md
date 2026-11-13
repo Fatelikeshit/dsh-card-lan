@@ -464,8 +464,8 @@ window.__ModuleLoader__.load({
 ### 7.8 人机补位（v6）
 
 - `config.fillBots`：布尔，默认 `false`，`view.config` 暴露；`POST /api/card-lan/config` 接受 `{fillBots:boolean}`，非布尔 → `invalid-fillbots`。
-- 作用范围：`game` 为 `doudizhu` / `paodekuai` 的牌局。房主点「开始本局」时若 `fillBots=true`，用机器人把空位补到该玩法 `minPlayers`（3）：机器人 node 形如 `bot-1`/`bot-2`，昵称「机器人·小A」「机器人·小B」，`players[].bot=true`（其余字段同普通玩家；手牌仍按查看者隐私，非本人不可见）。
-- 机器人只存在于房主牌局内：不广播 hello、不参与发现/TTL 清理、不接受网络 action；`关闭牌桌` 时清除，`开始下一局` 时按需重新补齐（只补空位）。
+- 作用范围：`game` 为 `doudizhu` / `paodekuai` 的牌局。房主开启 `fillBots` 后：**开桌即按已入座真人补足 `minPlayers`（3）**（未开局时桌上就显示 `2 个机器人`）；`idle/result` 阶段后加入的真人会**顶掉一个机器人**，不会因机器人占座被 `full` 拒绝；`playing/bidding/dealer` 阶段仍拒绝入座。机器人 node 形如 `bot-1`/`bot-2`，昵称「机器人·小A」「机器人·小B」，`players[].bot=true`（其余字段同普通玩家；手牌仍按查看者隐私，非本人不可见）。
+- 机器人只存在于房主牌局内：不广播 hello、不参与发现/TTL 清理、不接受网络 action；房主关闭 `fillBots`（且处于 idle/result）或 `关闭牌桌` 时清除机器人；`开始下一局` 时按当前真人数补空位。
 - 机器人行动：轮到机器人后 600–1000ms 自动动作（宿主驱动，引擎提供决策）：
   - 斗地主：`bidding` 按手牌强度 `bid true/false`（保证不会连续三人不叫导致无限重发）；`playing` 领出最小合法牌，跟牌优先最小能压过的同型牌、必要时炸弹，压不过 `pass`；
   - 跑得快：领出最小单张；跟牌出「能压过的最小合法牌」并遵守 must-play，压不过才 `pass`；
