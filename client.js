@@ -161,6 +161,16 @@ window.__ModuleLoader__.load({
       roomHint: '只有房间名相同的电脑才能互相发现；改房间名会清空发现列表并关闭牌桌。',
       port: 'UDP 端口',
       portHint: '两台电脑必须一致（默认 41235）；改端口会重新监听。',
+      inviteLabel: '邀请朋友',
+      inviteCode: '邀请码',
+      copyInvite: '复制房间名+端口',
+      inviteCopied: '已复制邀请：{code}',
+      inviteCopyFailed: '复制失败，请手动复制：{code}',
+      invitePlaceholder: '粘贴朋友发来的邀请',
+      applyInvite: '填入',
+      inviteApplied: '已填入邀请：房间「{room}」、端口 {port}，点「保存」生效。',
+      inviteInvalid: '无法识别的邀请，需要包含房间名和端口（1024–65535）。',
+      inviteHint: '复制出的格式是 DSH-CARD-LAN|房间名|端口；粘贴后点「填入」，再点保存。',
       nick: '我的昵称',
       nickHint: '牌桌上别人看到的名字，1–24 个字符。',
       roomSettingsLabel: '房间设置（开桌时生效）',
@@ -397,6 +407,97 @@ window.__ModuleLoader__.load({
       } catch (error) {
         return { ok: false, error: String(error && error.message ? error.message : error) }
       }
+    }
+
+    /* ------------------------------------------------------------------ *
+     * Invite sharing (PROTOCOL §7.10): pure client-side room+port exchange.
+     * ------------------------------------------------------------------ */
+
+    /** Max room-name length for an invite (mirrors PROTOCOL §1). */
+    const INVITE_ROOM_MAX = 32
+
+    /** Build the shareable invite code for the lobby form values. */
+    function inviteCodeOf(room, port) {
+      const name = room === undefined || room === null ? '' : String(room).trim()
+      return 'DSH-CARD-LAN|' + name + '|' + String(port)
+    }
+
+    /**
+     * Copy one string to the clipboard: the async Clipboard API first, then a
+     * throwaway textarea + execCommand('copy') for insecure contexts/blocks.
+     * Resolves true only when something actually copied.
+     */
+    async function copyText(text) {
+      const value = typeof text === 'string' ? text : String(text)
+      try {
+        if (typeof navigator !== 'undefined' && navigator !== null
+          && navigator.clipboard !== undefined && navigator.clipboard !== null
+          && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(value)
+          return true
+        }
+      } catch (error) {
+        // Permission/secure-context failures fall through to the legacy path.
+      }
+      try {
+        if (typeof document === 'undefined' || document === null) return false
+        const area = document.createElement('textarea')
+        area.value = value
+        if (typeof area.setAttribute === 'function') area.setAttribute('readonly', '')
+        area.style.position = 'fixed'
+        area.style.top = '-1000px'
+        area.style.opacity = '0'
+        if (document.body !== undefined && document.body !== null) document.body.appendChild(area)
+        if (typeof area.select === 'function') area.select()
+        if (typeof area.setSelectionRange === 'function') area.setSelectionRange(0, value.length)
+        const copied = typeof document.execCommand === 'function' && document.execCommand('copy') === true
+        if (area.parentNode !== null && area.parentNode !== undefined
+          && typeof area.parentNode.removeChild === 'function') {
+          area.parentNode.removeChild(area)
+        }
+        return copied
+      } catch (error) {
+        return false
+      }
+    }
+
+    /**
+     * Parse a pasted invite. Accepts `DSH-CARD-LAN|room|port` plus looser
+     * `room port`, `room,port`, `room；port`, `room|port` spellings; the port is
+     * the only 1024–65535 integer token, everything else is the room name.
+     * Returns { room, port } or null when the payload is unusable.
+     */
+    function parseInvite(raw) {
+      const text = typeof raw === 'string' ? raw.trim() : ''
+      if (text === '') return null
+      let room = ''
+      let port = Number.NaN
+      const prefix = 'DSH-CARD-LAN|'
+      if (text.slice(0, prefix.length).toUpperCase() === prefix) {
+        const parts = text.split('|')
+        room = (parts[1] !== undefined ? parts[1] : '').trim()
+        port = Number((parts[2] !== undefined ? parts[2] : '').trim())
+      } else {
+        const tokens = text.split(/[|,，;；\t ]+/).filter((token) => token !== '')
+        const rooms = []
+        const ports = []
+        for (const token of tokens) {
+          const numeric = Number(token)
+          if (/^\d+$/.test(token) && Number.isInteger(numeric) && numeric >= 1024 && numeric <= 65535) {
+            ports.push(numeric)
+          } else {
+            rooms.push(token)
+          }
+        }
+        if (ports.length === 1) {
+          port = ports[0]
+          room = rooms.join(' ').trim()
+        }
+      }
+      if (!Number.isInteger(port) || port < 1024 || port > 65535) return null
+      if (room === '' || room.length > INVITE_ROOM_MAX) return null
+      if (/[\u0000-\u001f\u007f]/.test(room)) return null
+      return { room, port }
     }
 
     /* ------------------------------------------------------------------ *
@@ -1105,6 +1206,7 @@ window.__ModuleLoader__.load({
       const data = snapshot.data
       const [form, setForm] = useState(null)
       const [manual, setManual] = useState({ ip: '', port: '41235', password: '' })
+      const [invitePaste, setInvitePaste] = useState('')
       const [notice, setNotice] = useState(null)
       const [busy, setBusy] = useState(false)
       const [peerPasswords, setPeerPasswords] = useState({})
@@ -1341,6 +1443,29 @@ window.__ModuleLoader__.load({
         await act(body, zh.noticeJoin)
       }
 
+      /** Invite helpers (PROTOCOL §7.10): copy/paste room+port, no auto-PATCH. */
+      const inviteCode = inviteCodeOf(form !== null ? form.room : '', form !== null ? form.port : '')
+
+      const copyInvite = async () => {
+        if (form === null) return
+        const code = inviteCodeOf(form.room, form.port)
+        const copied = await copyText(code)
+        if (copied) showNotice(fmt(zh.inviteCopied, { code }), false)
+        else showNotice(fmt(zh.inviteCopyFailed, { code }), true)
+      }
+
+      const applyInvite = () => {
+        if (form === null) return
+        const parsed = parseInvite(invitePaste)
+        if (parsed === null) {
+          showNotice(zh.inviteInvalid, true)
+          return
+        }
+        setForm((current) => (current === null ? current : { ...current, room: parsed.room, port: parsed.port }))
+        setManual((current) => ({ ...current, port: String(parsed.port) }))
+        showNotice(fmt(zh.inviteApplied, { room: parsed.room, port: parsed.port }), false)
+      }
+
       const head = h('div', { key: 'head', className: 'dsh-card-lan-lobby-head' }, [
         h('h3', { key: 'title', className: 'dsh-card-lan-title' }, zh.nav),
         h('p', { key: 'hint', className: 'dsh-card-lan-muted dsh-card-lan-small' }, zh.hint),
@@ -1442,6 +1567,52 @@ window.__ModuleLoader__.load({
             )),
           }),
           h('span', { key: 'hint', className: 'dsh-card-lan-muted dsh-card-lan-small' }, zh.portHint),
+        ]),
+        h('div', { key: 'invite', className: 'dsh-card-lan-field dsh-card-lan-settings-block' }, [
+          h('span', { key: 'label', className: 'dsh-card-lan-label' }, zh.inviteLabel),
+          h('span', { key: 'hint', className: 'dsh-card-lan-muted dsh-card-lan-small' }, zh.inviteHint),
+          h('div', { key: 'copyRow', className: 'dsh-card-lan-actions' }, [
+            h('input', {
+              key: 'code',
+              className: 'dsh-card-lan-input dsh-card-lan-input-invite',
+              type: 'text',
+              readOnly: true,
+              'aria-label': zh.inviteCode,
+              value: inviteCode,
+              onFocus: (event) => {
+                if (event !== null && event !== undefined && event.target !== null
+                  && event.target !== undefined && typeof event.target.select === 'function') {
+                  event.target.select()
+                }
+              },
+            }),
+            h('button', {
+              key: 'copy',
+              type: 'button',
+              className: 'dsh-card-lan-button',
+              disabled: form === null || busy,
+              onClick: () => void copyInvite(),
+            }, zh.copyInvite),
+          ]),
+          h('div', { key: 'pasteRow', className: 'dsh-card-lan-actions' }, [
+            h('input', {
+              key: 'paste',
+              className: 'dsh-card-lan-input dsh-card-lan-input-invite',
+              type: 'text',
+              'aria-label': zh.inviteLabel,
+              placeholder: zh.invitePlaceholder,
+              value: invitePaste,
+              disabled: form === null || busy,
+              onChange: (event) => setInvitePaste(event.target.value),
+            }),
+            h('button', {
+              key: 'apply',
+              type: 'button',
+              className: 'dsh-card-lan-button',
+              disabled: form === null || busy,
+              onClick: () => applyInvite(),
+            }, zh.applyInvite),
+          ]),
         ]),
         h('label', { key: 'nick', className: 'dsh-card-lan-field' }, [
           h('span', { key: 'label', className: 'dsh-card-lan-label' }, zh.nick),
@@ -2624,6 +2795,7 @@ window.__ModuleLoader__.load({
       '.dsh-card-lan-input:disabled{opacity:.55;cursor:not-allowed}',
       '.dsh-card-lan-input-narrow{max-width:170px}',
       '.dsh-card-lan-input-ip{flex:1 1 170px;min-width:0}',
+      '.dsh-card-lan-input-invite{flex:1 1 220px;min-width:0;font-variant-numeric:tabular-nums}',
       '.dsh-card-lan-input-port{flex:0 0 100px;width:100px}',
       '.dsh-card-lan-range-row{display:flex;align-items:center;gap:10px;max-width:420px}',
       '.dsh-card-lan-range{flex:1 1 auto;min-width:120px;accent-color:var(--dsw-alias-brand-primary,#4d6bfe);cursor:pointer}',

@@ -480,6 +480,13 @@ window.__ModuleLoader__.load({
 - 大厅在「观战/密码」附近加 checkbox「人机补位（斗地主/跑得快）」，默认取 `view.config.fillBots`，改动 PATCH 配置。
 - 牌桌里 `bot === true` 的玩家昵称旁显示「🤖 机器人」标记；其手牌仍只显示剩余张数，不显示牌面；其余交互不变。
 
+### 7.10 邀请复制/粘贴（v6.4）
+
+纯客户端功能，不新增宿主字段或接口；大厅网络设置（房间名 / UDP 端口）下方加「邀请」块：
+
+- **「复制房间名+端口」**：生成 `DSH-CARD-LAN|<room>|<port>` 写入剪贴板（`navigator.clipboard.writeText`，不可用时回退临时 `textarea` + `document.execCommand('copy')`）；成功 notice 显示复制内容，失败提示手动复制。
+- **粘贴框 + 「填入」**：接受 `DSH-CARD-LAN|room|port`，也容忍 `房间名 端口`、`房间名,端口`、`房间名；端口` 等写法；解析成功把 room/port 填进表单（端口同时同步到手动加入框），提示「点保存生效」；失败给出格式要求（端口 1024–65535，房间名 1–32 字符）。粘贴只填表单，不自动 PATCH 配置。
+
 ## 8. 验收补充（v4）
 
 - `node --check` 两个半边通过。
