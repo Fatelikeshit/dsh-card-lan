@@ -325,9 +325,9 @@ window.__ModuleLoader__.load({
 
 ### 7.1 配置与开桌
 
-- `config.game`：`"blackjack" | "doudizhu" | "paodekuai"`，默认 `"blackjack"`，表示下次「创建牌桌」的玩法（持久化）。
+- `config.game`：`"blackjack" | "doudizhu" | "paodekuai" | "guandan"`，默认 `"blackjack"`，表示下次「创建牌桌」的玩法（持久化）。
 - `view.config.game` 暴露。
-- `action { "type":"open", "game"?: "blackjack"|"doudizhu"|"paodekuai" }`：带 `game` 时先写回 `config.game` 再开桌；非法 → `{ok:false,error:"invalid-game"}`。不带则用 `config.game`。
+- `action { "type":"open", "game"?: "blackjack"|"doudizhu"|"paodekuai"|"guandan" }`：带 `game` 时先写回 `config.game` 再开桌；非法 → `{ok:false,error:"invalid-game"}`。不带则用 `config.game`。
 - `hello.table` 增加 `game` 字段，发现列表按玩法显示（21 点 / 斗地主）。
 - `view.table.game` 必填（两种玩法都带）；21 点的 table 结构不变。
 
@@ -451,7 +451,7 @@ window.__ModuleLoader__.load({
 
 ### 7.7 浏览器半边（多玩法续）
 
-- 大厅「创建牌桌」旁加玩法选择：`21 点` / `斗地主` / `跑得快`（默认取 `view.config.game`），点创建时 `action {type:"open", game}`；发现列表显示玩法标签。
+- 大厅「创建牌桌」旁加玩法选择：`21 点` / `斗地主` / `跑得快` / `掼蛋`（默认取 `view.config.game`），点创建时 `action {type:"open", game}`；发现列表显示玩法标签。
 - `view.table.game === "doudizhu"` 时渲染斗地主牌桌（不能用 21 点 UI）：
   - 顶部：局数、阶段（叫地主中 / 出牌中 / 本局结束）、地主标记、回合倒计时；
   - 其他人：昵称、地主/农民标记、剩余张数、当前回合高亮、已出完；
@@ -494,6 +494,29 @@ window.__ModuleLoader__.load({
 - **「房间」页签**：联机开关、联机状态行、创建/开始/关闭牌桌 + 我的身份、**邀请朋友（复制/粘贴邀请码）**、发现列表、手动 IP+端口加入；
 - **「设置」页签**：房间名 / UDP 端口 / 昵称 +「保存/刷新」、房间设置（密码、观战、机器人数量、自动补齐、回合超时）、浮层显示设置（透明度/大小/自动变淡/重置位置/隐藏浮层）；
 - 页签切换不清空表单草稿；notice 在两个页签都可见；其余交互与接口不变。
+
+### 7.12 掼蛋（v7.0）
+
+4 人、两副牌 108 张（含大小王各 2），每人 27 张；座位 0/2 一队、1/3 一队（对家）。
+
+- **级牌**：初始 2；当前局级牌 = `table.level`（上一局头游队伍的级牌，首局 2）。`table.teamLevels` = `["rank","rank"]` 记录两队升级进度（2..A）。
+- **逢人配**：红桃级牌是万能牌，可替代任意非王牌组成牌型；单出/对子等按级牌本身算。手牌里的红桃级牌照常下发（客户端可标「配」）。
+- **牌大小**：`2<3<…<10<J<Q<K<A<级牌<小王<大王`；花色不区分大小（同花顺除外）。
+- **牌型**：单、对、三、三带二（三张+对子）、顺子（5 张连续，A 可作 1 组成 A2345）、连对（3 连对）、钢板（2 组连续三张）、炸弹（4 张及以上同点）、同花顺（5 张同花色顺子）、四大天王（2 大王+2 小王）。同型同张数比主牌；炸弹类压非炸弹：4炸<5炸<同花顺<6炸<7炸<8炸<四大天王（同花顺之间比点数；四大天王最大）。
+- **流程**：第一局由座位 0 先出（或按约定），之后每局由上一局头游先出。有人先出完成为**头游**，其余三家继续打，按出完顺序得二游/三游/末游。
+- **升级**：头游+二游同队（双上）+3；头游+三游 +2；头游+末游 +1；另一队不升。达到 A 后需「过 A」：该队打 A 的这局若再拿头游（且满足升级）即赢得整场，否则停在 A。
+- 动作：`play`/`pass`；v7.0 **不含进贡/还贡**（后续版本可加）。
+- `view.table`：`game/role/hostNode/phase(playing|result)/round/level/teamLevels/team/players(node,nick,self,team,count,status,result,order)/myCards/lastPlay/mustPlay/log/scores/staleMs/turnRemainingMs`；`phase=result` 时带 `winnerTeam`、`upgrade`（0–3）、`orders`（头游→末游的 node 列表）。
+- 错误码：`not-your-turn`、`bad-phase`、`bad-cards`、`must-play`。
+- 超时：领出最小单张；跟牌出能压过的最小合法牌，压不过 `pass`。
+- 机器人：v7.0 不补（`fillBots` 仍只对斗地主/跑得快生效）。
+
+### 7.13 掼蛋 UI（v7.0）
+
+- 大厅玩法选择增加「掼蛋」，发现列表显示玩法标签。
+- 牌桌 4 座：显示昵称、队伍标记（我方/对方）、剩余张数、当前回合高亮、出完顺序/结果；顶部显示当前级牌与双方级数（如「打 2 · 我方 2 / 对方 2」）。
+- 我的手牌 27 张：可点选（多行/换行排列），红桃级牌带「配」标记；出牌/不要；领出提示；结算横幅「本局 +N 级」或「过 A，胜利」。
+- 浮层宽度需比 3 人玩法更宽（可用 large 或按 27 张自适应换行）。
 
 ## 8. 验收补充（v4）
 

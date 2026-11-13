@@ -82,8 +82,8 @@ window.__ModuleLoader__.load({
     const RESULTS = { win: '赢', lose: '输', push: '平' }
 
     /** Game kinds (PROTOCOL §7.1/§7.7); anything unknown falls back to blackjack. */
-    const GAME_LABELS = { blackjack: '21 点', doudizhu: '斗地主', paodekuai: '跑得快' }
-    const GAME_ORDER = ['blackjack', 'doudizhu', 'paodekuai']
+    const GAME_LABELS = { blackjack: '21 点', doudizhu: '斗地主', paodekuai: '跑得快', guandan: '掼蛋' }
+    const GAME_ORDER = ['blackjack', 'doudizhu', 'paodekuai', 'guandan']
     const DEFAULT_GAME = 'blackjack'
 
     /** Dou Dizhu phases (PROTOCOL §7.3): idle is the pre-deal table state. */
@@ -91,6 +91,15 @@ window.__ModuleLoader__.load({
 
     /** Pao De Kuai phases (PROTOCOL §7.6): no bidding, no landlord. */
     const PDK_PHASES = { idle: '等待开始', playing: '出牌中', result: '本局结束' }
+
+    /** Guandan phases (PROTOCOL §7.12): 4 seats, no bidding. */
+    const GD_PHASES = { idle: '等待开始', playing: '出牌中', result: '本局结束' }
+
+    /** Guandan finishing labels, first out → last out. */
+    const GD_ORDER_LABELS = ['头游', '二游', '三游', '末游']
+
+    /** Guandan needs a wider panel so 27 cards wrap into readable rows. */
+    const GUANDAN_MIN_WIDTH = 420
 
     /** Dou Dizhu rank order: 3 < 4 < … < 2 < 小王 < 大王. */
     const DDZ_RANK_ORDER = {
@@ -354,6 +363,25 @@ window.__ModuleLoader__.load({
       pkCapsule: '跑得快 · 第 {n} 局',
       pkCapsuleIdle: '跑得快 · 未开局',
       pkMustPlay: '这手必须管上，不能不要',
+      gdTitle: '掼蛋 · 第 {n} 局',
+      gdTitleIdle: '掼蛋 · 未开局',
+      gdCapsule: '掼蛋 · 第 {n} 局',
+      gdCapsuleIdle: '掼蛋 · 未开局',
+      gdLevelInfo: '打 {level} · 我方 {ours} / 对方 {theirs}',
+      gdLevelInfoSpectator: '打 {level} · 队伍1 {a} / 队伍2 {b}',
+      gdTeamOurs: '我方',
+      gdTeamTheirs: '对方',
+      gdTeamPartner: '我方·对家',
+      gdTeamOne: '队伍1',
+      gdTeamTwo: '队伍2',
+      gdWild: '配',
+      gdUpgradeOurs: '本局 +{n} 级（我们）',
+      gdUpgradeTheirs: '本局 +{n} 级（对方）',
+      gdUpgradeTeam: '本局 +{n} 级（队伍{team}）',
+      gdVictory: '过 A，胜利',
+      gdRoundOver: '本局结束',
+      gdOrdersTitle: '名次',
+      noPlayersGuandan: '人数不足：掼蛋需要 4 人',
     }
 
     /** Tiny `{name}` interpolator for the copy above. */
@@ -529,7 +557,7 @@ window.__ModuleLoader__.load({
 
     /** Normalize an untrusted game id (PROTOCOL §7.1/§7.7). */
     function gameOf(value) {
-      return value === 'doudizhu' || value === 'paodekuai' ? value : DEFAULT_GAME
+      return value === 'doudizhu' || value === 'paodekuai' || value === 'guandan' ? value : DEFAULT_GAME
     }
 
     /** Human label for one game id. */
@@ -537,14 +565,16 @@ window.__ModuleLoader__.load({
       return GAME_LABELS[gameOf(value)]
     }
 
-    /** True for the two card-game tables that share the Doudizhu-style layout. */
+    /** True for the card-game tables that share the Doudizhu-style layout. */
     function isCardGameId(game) {
-      return game === 'doudizhu' || game === 'paodekuai'
+      return game === 'doudizhu' || game === 'paodekuai' || game === 'guandan'
     }
 
     /** Phase label for the active game. */
     function phaseLabelFor(game, phase) {
-      const labels = game === 'doudizhu' ? DDZ_PHASES : (game === 'paodekuai' ? PDK_PHASES : PHASES)
+      const labels = game === 'doudizhu'
+        ? DDZ_PHASES
+        : (game === 'paodekuai' ? PDK_PHASES : (game === 'guandan' ? GD_PHASES : PHASES))
       return labels[phase] !== undefined ? labels[phase] : phase
     }
 
@@ -552,6 +582,7 @@ window.__ModuleLoader__.load({
     function gameTitleOf(game, round) {
       if (game === 'doudizhu') return round > 0 ? fmt(zh.ddzTitle, { n: round }) : zh.ddzTitleIdle
       if (game === 'paodekuai') return round > 0 ? fmt(zh.pkTitle, { n: round }) : zh.pkTitleIdle
+      if (game === 'guandan') return round > 0 ? fmt(zh.gdTitle, { n: round }) : zh.gdTitleIdle
       return round > 0 ? fmt(zh.tableTitle, { n: round }) : zh.tableTitleIdle
     }
 
@@ -559,7 +590,26 @@ window.__ModuleLoader__.load({
     function gameCapsuleTitleOf(game, round) {
       if (game === 'doudizhu') return round > 0 ? fmt(zh.ddzCapsule, { n: round }) : zh.ddzCapsuleIdle
       if (game === 'paodekuai') return round > 0 ? fmt(zh.pkCapsule, { n: round }) : zh.pkCapsuleIdle
+      if (game === 'guandan') return round > 0 ? fmt(zh.gdCapsule, { n: round }) : zh.gdCapsuleIdle
       return round > 0 ? fmt(zh.capsule, { n: round }) : zh.capsuleIdle
+    }
+
+    /** Team index from an untrusted value (0/1) or null. */
+    function teamIndexOf(value, fallback) {
+      if (value !== null && value !== undefined && value !== '' && typeof value !== 'boolean') {
+        const numeric = Number(value)
+        if (Number.isInteger(numeric) && (numeric === 0 || numeric === 1)) return numeric
+      }
+      if (fallback !== undefined) return teamIndexOf(fallback)
+      return null
+    }
+
+    /** True when the card is the heart level card (Guandan wild card, 「配」). */
+    function isGuandanWild(card, level) {
+      const rank = typeof card === 'string' ? card.trim().toUpperCase() : ''
+      const levelRank = typeof level === 'string' ? level.trim().toUpperCase() : ''
+      if (rank.length < 2 || levelRank === '') return false
+      return rank.slice(-1) === 'H' && rank.slice(0, -1) === levelRank
     }
 
     /** Rank order of one Dou Dizhu card code (unknown codes sort first). */
@@ -644,9 +694,13 @@ window.__ModuleLoader__.load({
       if (trimmed === '') return ''
       // Pao De Kuai's must-play rule reads differently from Doudizhu's: there
       // it means "you can beat this, so you must" (PROTOCOL §7.6).
-      if (trimmed === 'must-play' && game === 'paodekuai') return zh.pkMustPlay
-      // Dou Dizhu / Pao De Kuai need 3 seats; short tables report `no-players`.
-      if (trimmed === 'no-players' && isCardGameId(game)) return zh.noPlayersCard
+      if (trimmed === 'must-play' && (game === 'paodekuai' || game === 'guandan')) return zh.pkMustPlay
+      // Dou Dizhu / Pao De Kuai need 3 seats (Guandan needs 4); short tables
+      // report `no-players`.
+      if (trimmed === 'no-players') {
+        if (game === 'guandan') return zh.noPlayersGuandan
+        if (isCardGameId(game)) return zh.noPlayersCard
+      }
       return ERROR_TEXT[trimmed] !== undefined ? ERROR_TEXT[trimmed] : fmt(zh.actionFailedWith, { reason: trimmed })
     }
 
@@ -887,8 +941,11 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'dsh-card-lan-hand' }, nodes)
     }
 
-    /** One Dou Dizhu card; when `onClick` is given the card is selectable. */
-    function ddzCardNode(card, key, selected, onClick) {
+    /**
+     * One hand card; `onToggle` (when given) makes it selectable. `badge`
+     * renders a tiny corner marker — used for Guandan's 「配」 wild card.
+     */
+    function ddzCardNode(card, key, selected, onToggle, badge) {
       const face = readCard(card)
       const props = {
         key,
@@ -898,32 +955,40 @@ window.__ModuleLoader__.load({
         title: face.text,
         'aria-label': face.text,
       }
-      if (onClick !== null && onClick !== undefined) {
+      if (onToggle !== null && onToggle !== undefined) {
         props.role = 'button'
         props.tabIndex = 0
         props['aria-pressed'] = selected === true
-        props.onClick = () => onClick(card)
+        props.onClick = () => onToggle()
         props.onKeyDown = (event) => {
           if (event === null || event === undefined) return
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault()
-            onClick(card)
+            onToggle()
           }
         }
       }
-      return h('span', props, face.text)
+      const children = [face.text]
+      if (badge !== undefined && badge !== null && badge !== '') {
+        children.push(h('span', { key: 'badge', className: 'dsh-card-lan-ddz-badge' }, badge))
+      }
+      return h('span', props, children)
     }
 
     /**
-     * Card-table body shared by Dou Dizhu (PROTOCOL §7.3) and Pao De Kuai
-     * (§7.6): seats + last play + hand + play/pass. `props.game` switches the
-     * game-specific extras (bidding + landlord only exist in Dou Dizhu).
+     * Card-table body shared by Dou Dizhu (PROTOCOL §7.3), Pao De Kuai (§7.6)
+     * and Guandan (§7.12): seats + last play + hand + play/pass. `props.game`
+     * switches the game-specific extras (bidding/landlord only in Dou Dizhu,
+     * teams/levels/orders only in Guandan).
      * A pure renderer: every value comes from the polled view, every write
      * goes back through a callback.
      */
     function buildCardGameContent(props) {
-      const game = props.game === 'paodekuai' ? 'paodekuai' : 'doudizhu'
+      const game = isCardGameId(props.game) ? props.game : 'doudizhu'
+      const isDdz = game === 'doudizhu'
       const isPdk = game === 'paodekuai'
+      const isGd = game === 'guandan'
+      const gd = isGd ? asObject(props.guandan) : null
       const role = props.role
       const isSpectator = props.isSpectator === true
       const phase = props.phase
@@ -932,7 +997,9 @@ window.__ModuleLoader__.load({
       const turnNode = asString(props.turnNode, '')
       const myNode = asString(props.myNode, '')
       const myCards = props.myCards
-      const selectedCards = props.selectedCards
+      // Selection is by hand index: Guandan plays with two decks, so the same
+      // card code can appear twice in one hand.
+      const selectedIndexes = asArray(props.selectedIndexes)
       const lastPlay = props.lastPlay
       const mustPlay = props.mustPlay === true
       const landlordPlayer = props.landlordPlayer
@@ -940,6 +1007,8 @@ window.__ModuleLoader__.load({
       const connectionBroken = props.connectionBroken === true
       const turnRemainingMs = asNumber(props.turnRemainingMs, -1)
       const activeTurn = !isSpectator && turnNode !== '' && turnNode === myNode
+      const gdMyTeam = gd !== null ? gd.myTeam : null
+      const mySeatIndex = isGd ? players.indexOf(me) : -1
 
       const playerByNode = (node) => {
         const target = asString(node, '')
@@ -949,13 +1018,27 @@ window.__ModuleLoader__.load({
         return undefined
       }
 
-      /* ---------- header extras: game pill, landlord (DDZ), countdown ---------- */
+      /* ---------- header extras: game pill, landlord (DDZ), levels (GD) ---------- */
       const headExtras = [
         h('span', { key: 'game', className: 'dsh-card-lan-pill is-game-' + game }, GAME_LABELS[game]),
       ]
-      if (!isPdk && landlordPlayer !== undefined) {
+      if (isDdz && landlordPlayer !== undefined) {
         headExtras.push(h('span', { key: 'landlord', className: 'dsh-card-lan-tag is-landlord' },
           fmt(zh.ddzLandlordMark, { name: asString(landlordPlayer.nick, zh.ddzLandlord) })))
+      }
+      if (isGd && gd !== null) {
+        const level = asString(gd.level, '2')
+        const levels = asArray(gd.teamLevels)
+        const first = asString(levels[0], '2')
+        const second = asString(levels[1], '2')
+        const levelText = gdMyTeam !== null
+          ? fmt(zh.gdLevelInfo, {
+            level,
+            ours: gdMyTeam === 0 ? first : second,
+            theirs: gdMyTeam === 0 ? second : first,
+          })
+          : fmt(zh.gdLevelInfoSpectator, { level, a: first, b: second })
+        headExtras.push(h('span', { key: 'level', className: 'dsh-card-lan-tag is-level' }, levelText))
       }
       if ((phase === 'bidding' || phase === 'playing') && turnRemainingMs >= 0) {
         headExtras.push(h('span', { key: 'countdown', className: 'dsh-card-lan-tag is-turn' },
@@ -1001,6 +1084,35 @@ window.__ModuleLoader__.load({
         if (slot.bot === true) {
           tags.push(h('span', { key: 'bot', className: 'dsh-card-lan-bot-tag', title: zh.botTag }, zh.botTag))
         }
+        // Guandan seats carry a team badge (ours/theirs, partner = 对家).
+        if (isGd) {
+          const slotTeam = teamIndexOf(slot.team)
+          const slotIndex = players.indexOf(slot)
+          const isPartner = mySeatIndex >= 0 && players.length === 4
+            && slotIndex === (mySeatIndex + 2) % 4
+          let teamText = ''
+          let teamClass = 'is-team-neutral'
+          if (slotTeam !== null) {
+            if (gdMyTeam !== null) {
+              if (slotTeam === gdMyTeam) {
+                teamText = isPartner ? zh.gdTeamPartner : zh.gdTeamOurs
+                teamClass = 'is-team-ours'
+              } else {
+                teamText = zh.gdTeamTheirs
+                teamClass = 'is-team-theirs'
+              }
+            } else {
+              teamText = slotTeam === 0 ? zh.gdTeamOne : zh.gdTeamTwo
+              teamClass = slotTeam === 0 ? 'is-team-ours' : 'is-team-theirs'
+            }
+          }
+          if (teamText !== '') {
+            tags.push(h('span', {
+              key: 'team',
+              className: 'dsh-card-lan-tag is-team ' + teamClass,
+            }, teamText))
+          }
+        }
         // Before the landlord is decided every seat has role null; showing a
         // random 农民 tag there would be a lie.
         if (rawSeatRole === 'landlord' || rawSeatRole === 'farmer') {
@@ -1014,10 +1126,24 @@ window.__ModuleLoader__.load({
             ? zh.ddzNoCards
             : (status === 'out' ? zh.ddzOut : fmt(zh.ddzCount, { n: count }))))
         if (isTurn) tags.push(h('span', { key: 'turn', className: 'dsh-card-lan-tag is-turn' }, zh.acting))
-        if (phase === 'bidding' && bidding === true) {
+        if (isDdz && phase === 'bidding' && bidding === true) {
           tags.push(h('span', { key: 'bid', className: 'dsh-card-lan-tag is-bid' }, zh.ddzBid))
-        } else if (phase === 'bidding' && bidding === false) {
+        } else if (isDdz && phase === 'bidding' && bidding === false) {
           tags.push(h('span', { key: 'bid', className: 'dsh-card-lan-tag' }, zh.ddzPassBid))
+        }
+        // Guandan shows the finishing order (头游 → 末游) once the round is over.
+        if (isGd && phase === 'result') {
+          const orderList = gd !== null ? asArray(gd.orders) : []
+          let orderIndex = orderList.indexOf(node)
+          if (orderIndex === -1) {
+            const numericOrder = asNumber(slot.order, -1)
+            if (numericOrder >= 1 && numericOrder <= 4) orderIndex = numericOrder - 1
+            else if (numericOrder >= 0 && numericOrder <= 3) orderIndex = numericOrder
+          }
+          if (orderIndex >= 0 && orderIndex < GD_ORDER_LABELS.length) {
+            tags.push(h('span', { key: 'order', className: 'dsh-card-lan-tag is-order' },
+              GD_ORDER_LABELS[orderIndex]))
+          }
         }
         if (seatResult === 'win') {
           tags.push(h('span', { key: 'result', className: 'dsh-card-lan-tag is-result-win' }, RESULTS.win))
@@ -1061,9 +1187,9 @@ window.__ModuleLoader__.load({
         const canSelect = phase === 'playing' && !busy && !connectionBroken
         const handHead = [
           h('span', { key: 'label', className: 'dsh-card-lan-label' }, fmt(zh.ddzMyHand, { n: myCards.length })),
-          selectedCards.length > 0
+          selectedIndexes.length > 0
             ? h('span', { key: 'sel', className: 'dsh-card-lan-tag is-turn' },
-              fmt(zh.ddzSelected, { n: selectedCards.length }))
+              fmt(zh.ddzSelected, { n: selectedIndexes.length }))
             : null,
           activeTurn ? h('span', { key: 'turn', className: 'dsh-card-lan-tag is-turn' }, zh.acting) : null,
           props.myScore !== null && props.myScore !== undefined
@@ -1076,23 +1202,55 @@ window.__ModuleLoader__.load({
         bodyNodes.push(h('div', { key: 'myHand', className: 'dsh-card-lan-ddz-hand-area' }, [
           h('div', { key: 'head', className: 'dsh-card-lan-row-head' }, handHead),
           myCards.length > 0
-            ? h('div', { key: 'cards', className: 'dsh-card-lan-ddz-hand' }, myCards.map((card) => ddzCardNode(
+            ? h('div', {
+              key: 'cards',
+              className: 'dsh-card-lan-ddz-hand' + (isGd ? ' is-guandan' : ''),
+            }, myCards.map((card, index) => ddzCardNode(
               card,
-              'hand:' + card,
-              selectedCards.indexOf(card) !== -1,
-              canSelect ? props.toggleCard : null,
+              'hand:' + index + ':' + card,
+              selectedIndexes.indexOf(index) !== -1,
+              canSelect ? () => props.toggleCard(index) : null,
+              isGd && gd !== null && isGuandanWild(card, gd.level) ? zh.gdWild : '',
             )))
             : h('span', { key: 'empty', className: 'dsh-card-lan-empty' }, zh.ddzOut),
         ]))
       }
 
-      /* ---------- result banner: landlord/farmer side (DDZ) or my win/lose ---------- */
+      /* ---------- result banner: side/upgrade for each game ---------- */
       if (phase === 'result') {
         const mine = me !== undefined ? asString(me.result, '') : ''
         const mineText = mine === 'win' ? zh.ddzIWin : (mine === 'lose' ? zh.ddzILose : '')
         const bannerClass = 'dsh-card-lan-banner '
           + (mine === 'win' ? 'is-win' : (mine === 'lose' ? 'is-lose' : 'is-none'))
-        if (isPdk) {
+        if (isGd) {
+          // Guandan: team upgrade / passing A, plus the 头游→末游 order.
+          const upgrade = gd !== null ? asNumber(gd.upgrade, -1) : -1
+          const winnerTeam = gd !== null ? gd.winnerTeam : null
+          let sideText = zh.gdRoundOver
+          if (gd !== null && gd.victory === true) {
+            sideText = zh.gdVictory
+          } else if (upgrade >= 0 && winnerTeam !== null) {
+            sideText = gdMyTeam !== null
+              ? fmt(winnerTeam === gdMyTeam ? zh.gdUpgradeOurs : zh.gdUpgradeTheirs, { n: upgrade })
+              : fmt(zh.gdUpgradeTeam, { n: upgrade, team: winnerTeam + 1 })
+          }
+          bodyNodes.push(h('div', { key: 'result', className: bannerClass, role: 'status' }, [
+            h('span', { key: 'side' }, sideText),
+          ]))
+          const orderList = gd !== null ? asArray(gd.orders) : []
+          if (orderList.length > 0) {
+            const orderLines = orderList.map((orderNode, index) => {
+              const orderPlayer = playerByNode(orderNode)
+              const orderNick = orderPlayer !== undefined ? asString(orderPlayer.nick, '玩家') : '玩家'
+              return h('div', { key: 'order' + index, className: 'dsh-card-lan-ddz-order-line' },
+                GD_ORDER_LABELS[index] + '：' + orderNick)
+            })
+            bodyNodes.push(h('div', { key: 'orders', className: 'dsh-card-lan-ddz-orders' }, [
+              h('div', { key: 'title', className: 'dsh-card-lan-label' }, zh.gdOrdersTitle),
+              ...orderLines,
+            ]))
+          }
+        } else if (isPdk) {
           // Pao De Kuai has no landlord: only my own win/lose is meaningful.
           bodyNodes.push(h('div', { key: 'result', className: bannerClass, role: 'status' }, [
             h('span', { key: 'mine' }, mineText !== '' ? mineText : zh.ddzRoundOver),
@@ -1111,7 +1269,7 @@ window.__ModuleLoader__.load({
 
       /* ---------- buttons ---------- */
       const actionNodes = []
-      if (!isPdk && phase === 'bidding' && activeTurn) {
+      if (isDdz && phase === 'bidding' && activeTurn) {
         actionNodes.push(h('button', {
           key: 'bid',
           type: 'button',
@@ -1131,7 +1289,7 @@ window.__ModuleLoader__.load({
           key: 'play',
           type: 'button',
           className: 'dsh-card-lan-button dsh-card-lan-button-primary',
-          disabled: busy || connectionBroken || selectedCards.length === 0,
+          disabled: busy || connectionBroken || selectedIndexes.length === 0,
           onClick: () => void props.playSelected(),
         }, zh.ddzPlay))
         actionNodes.push(h('button', {
@@ -2221,27 +2379,34 @@ window.__ModuleLoader__.load({
       const [dragPos, setDragPos] = useState(null)
       const dragState = useRef(null)
       const saveTimer = useRef(null)
-      const [selectedCards, setSelectedCards] = useState([])
+      const [selectedIndexes, setSelectedIndexes] = useState([])
       const [showSettings, setShowSettings] = useState(false)
       const settingsTimer = useRef(null)
       // A drag that ends over the capsule must not also expand it.
       const suppressCapsuleClick = useRef(false)
 
-      // The local Dou Dizhu selection is invalidated whenever the board, the
-      // turn or my hand changes (a play landed, the round moved on, re-deal).
+      // The local hand selection is invalidated whenever the board, the turn or
+      // my hand changes (a play landed, the round moved on, re-deal).
       const tableRecord = data !== null ? asObject(data.table) : null
       const boardKey = tableRecord === null ? '' : [
         asString(tableRecord.game, DEFAULT_GAME),
         asString(tableRecord.phase, ''),
         asString(tableRecord.turn, ''),
-        asArray(tableRecord.myCards).join(','),
+        // Sorted so a host re-ordering the hand does not reset the selection.
+        sortDdzCards(asArray(tableRecord.myCards)).join(','),
       ].join('|')
       useEffect(() => {
-        setSelectedCards([])
+        setSelectedIndexes([])
       }, [boardKey])
 
       const configRecord = data !== null ? asObject(data.config) : null
-      const sizeWidth = OVERLAY_WIDTHS[overlaySizeOf(configRecord)]
+      // Guandan needs room for 27 cards: keep at least a 420px panel even if the
+      // user picked the small/medium size (bigger sizes are respected).
+      const earlyGame = tableRecord !== null ? gameOf(tableRecord.game) : DEFAULT_GAME
+      const sizeWidth = Math.max(
+        earlyGame === 'guandan' ? GUANDAN_MIN_WIDTH : 0,
+        OVERLAY_WIDTHS[overlaySizeOf(configRecord)],
+      )
       const savedPosition = overlayPositionOf(configRecord)
       const savedX = savedPosition !== null ? savedPosition.x : null
       const savedY = savedPosition !== null ? savedPosition.y : null
@@ -2270,6 +2435,7 @@ window.__ModuleLoader__.load({
       const game = gameOf(table.game)
       const isDdz = game === 'doudizhu'
       const isPdk = game === 'paodekuai'
+      const isGuandan = game === 'guandan'
       const isCardGame = isCardGameId(game)
       const phase = asString(table.phase, 'idle')
       const round = Math.max(0, asNumber(table.round, 0))
@@ -2341,6 +2507,22 @@ window.__ModuleLoader__.load({
       const cardMustPlay = isCardGame && table.mustPlay === true
       const myScore = myNode !== '' && scoreMap !== null ? scoreMap[myNode] : null
 
+      // Guandan-only view fields (PROTOCOL §7.12); ignored by the other games.
+      const guandanInfo = isGuandan
+        ? {
+          level: asString(table.level, '2'),
+          teamLevels: asArray(table.teamLevels).map((value) => asString(value, '2')).slice(0, 2),
+          myTeam: teamIndexOf(table.team, me !== undefined ? me.team : undefined),
+          winnerTeam: teamIndexOf(table.winnerTeam),
+          upgrade: asNumber(table.upgrade, -1),
+          orders: asArray(table.orders).map((value) => asString(value, '')).filter((value) => value !== ''),
+          // Hosts expose "passed A / match over" as `matchWon` (PROTOCOL §7.12
+          // extension); older probes are kept for defensive compatibility.
+          victory: table.matchWon === true || table.victory === true || table.passedA === true
+            || table.matchOver === true || table.gameOver === true,
+        }
+        : null
+
       const showNotice = (text, isError) => {
         setNotice(text === undefined || text === null || text === '' ? null : { text, error: isError === true })
       }
@@ -2393,16 +2575,21 @@ window.__ModuleLoader__.load({
         void applyOverlayConfig({ overlayX: null, overlayY: null }, zh.resetPositionDone)
       }
 
-      /** Card-game writes (PROTOCOL §7.3/§7.6): bid / play / pass / start. */
-      const toggleCard = (card) => {
-        setSelectedCards((current) => (current.indexOf(card) === -1
-          ? current.concat([card])
-          : current.filter((item) => item !== card)))
+      /** Card-game writes (PROTOCOL §7.3/§7.6/§7.12): bid / play / pass / start. */
+      const toggleCard = (index) => {
+        setSelectedIndexes((current) => (current.indexOf(index) === -1
+          ? current.concat([index])
+          : current.filter((item) => item !== index)))
       }
       const playSelected = async () => {
-        if (selectedCards.length === 0) return
-        const saved = await act({ type: 'play', cards: selectedCards })
-        if (saved) setSelectedCards([])
+        if (selectedIndexes.length === 0) return
+        // Map hand indexes back to card codes (duplicates are legitimate).
+        const cards = selectedIndexes
+          .map((index) => cardMyCards[index])
+          .filter((card) => typeof card === 'string' && card !== '')
+        if (cards.length === 0) return
+        const saved = await act({ type: 'play', cards })
+        if (saved) setSelectedIndexes([])
       }
       const passTurn = () => void act({ type: 'pass' })
       const bidTurn = (value) => void act({ type: 'bid', bid: value })
@@ -2526,9 +2713,10 @@ window.__ModuleLoader__.load({
           lastPlay: cardLastPlay,
           mustPlay: cardMustPlay,
           myCards: cardMyCards,
-          selectedCards,
+          selectedIndexes,
           toggleCard,
           landlordPlayer,
+          guandan: guandanInfo,
           myScore,
           busy,
           connectionBroken,
@@ -3044,6 +3232,13 @@ window.__ModuleLoader__.load({
       '.dsh-card-lan-tag.is-game-doudizhu{background:rgba(245,158,11,.16);border-color:rgba(245,158,11,.4);color:#fbbf24}',
       '.dsh-card-lan-tag.is-game-paodekuai{background:rgba(34,211,238,.14);border-color:rgba(34,211,238,.4);color:#22d3ee}',
       '.dsh-card-lan-pill.is-game-paodekuai{background:rgba(34,211,238,.14);border-color:rgba(34,211,238,.45);color:#22d3ee}',
+      '.dsh-card-lan-tag.is-game-guandan{background:rgba(167,139,250,.16);border-color:rgba(167,139,250,.4);color:#c4b5fd}',
+      '.dsh-card-lan-pill.is-game-guandan{background:rgba(167,139,250,.16);border-color:rgba(167,139,250,.45);color:#c4b5fd}',
+      '.dsh-card-lan-tag.is-team-ours{background:rgba(34,197,94,.18);border-color:rgba(34,197,94,.42);color:#4ade80}',
+      '.dsh-card-lan-tag.is-team-theirs{background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.4);color:#f87171}',
+      '.dsh-card-lan-tag.is-team-neutral{background:rgba(148,163,184,.14);color:var(--dsw-alias-label-secondary,#94a3b8)}',
+      '.dsh-card-lan-tag.is-level{background:rgba(245,158,11,.16);border-color:rgba(245,158,11,.4);color:#fbbf24}',
+      '.dsh-card-lan-tag.is-order{background:rgba(167,139,250,.14);color:#c4b5fd}',
       '.dsh-card-lan-tag.is-game-blackjack{background:rgba(148,163,184,.14);border-color:rgba(148,163,184,.3);',
       'color:var(--dsw-alias-label-secondary,#94a3b8)}',
       '.dsh-card-lan-pill.is-game-doudizhu{background:rgba(245,158,11,.16);border-color:rgba(245,158,11,.45);color:#fbbf24}',
@@ -3062,8 +3257,15 @@ window.__ModuleLoader__.load({
       '.dsh-card-lan-ddz-hand-area{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border-radius:10px;',
       'background:var(--dsw-alias-bg-layer-1,rgba(15,23,42,.45));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.2))}',
       '.dsh-card-lan-ddz-hand{display:flex;flex-wrap:wrap;gap:4px;align-items:flex-end;padding:4px 0 8px;min-height:38px}',
-      '.dsh-card-lan-ddz-card{min-width:24px;height:34px;padding:0 3px;font-size:12px;border:2px solid transparent;',
-      'cursor:pointer;transition:transform .12s ease,border-color .12s ease}',
+      '.dsh-card-lan-ddz-hand.is-guandan{gap:3px;max-height:150px;overflow-y:auto;overscroll-behavior:contain;padding-right:2px}',
+      '.dsh-card-lan-ddz-card{position:relative;min-width:24px;height:34px;padding:0 3px;font-size:12px;',
+      'border:2px solid transparent;cursor:pointer;transition:transform .12s ease,border-color .12s ease}',
+      '.dsh-card-lan-ddz-badge{position:absolute;top:-6px;right:-6px;display:inline-flex;align-items:center;',
+      'justify-content:center;min-width:14px;height:14px;padding:0 2px;border-radius:999px;font-size:9px;line-height:1;',
+      'background:rgba(239,68,68,.92);color:#fff;box-shadow:0 1px 3px rgba(2,6,23,.35)}',
+      '.dsh-card-lan-ddz-orders{display:flex;flex-direction:column;gap:2px;padding:6px 10px;border-radius:8px;',
+      'background:var(--dsw-alias-bg-layer-1,rgba(15,23,42,.35));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.2))}',
+      '.dsh-card-lan-ddz-order-line{font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary,#94a3b8)}',
       '.dsh-card-lan-ddz-card:hover{transform:translateY(-3px)}',
       '.dsh-card-lan-ddz-card.is-selected{transform:translateY(-6px);border-color:var(--dsw-alias-brand-primary,#4d6bfe);',
       'box-shadow:0 6px 12px rgba(77,107,254,.35)}',
