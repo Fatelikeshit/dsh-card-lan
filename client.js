@@ -82,8 +82,14 @@ window.__ModuleLoader__.load({
     const RESULTS = { win: '赢', lose: '输', push: '平' }
 
     /** Game kinds (PROTOCOL §7.1/§7.7); anything unknown falls back to blackjack. */
-    const GAME_LABELS = { blackjack: '21 点', doudizhu: '斗地主', paodekuai: '跑得快', guandan: '掼蛋' }
-    const GAME_ORDER = ['blackjack', 'doudizhu', 'paodekuai', 'guandan']
+    const GAME_LABELS = {
+      blackjack: '21 点',
+      doudizhu: '斗地主',
+      paodekuai: '跑得快',
+      guandan: '掼蛋',
+      zhajinhua: '炸金花',
+    }
+    const GAME_ORDER = ['blackjack', 'doudizhu', 'paodekuai', 'guandan', 'zhajinhua']
     const DEFAULT_GAME = 'blackjack'
 
     /** Dou Dizhu phases (PROTOCOL §7.3): idle is the pre-deal table state. */
@@ -100,6 +106,12 @@ window.__ModuleLoader__.load({
 
     /** Guandan needs a wider panel so 27 cards wrap into readable rows. */
     const GUANDAN_MIN_WIDTH = 420
+
+    /** Zhajinhua phases (PROTOCOL §7.14): betting round, then result. */
+    const ZJH_PHASES = { idle: '等待开始', bidding: '下注中', result: '本局结束' }
+
+    /** Zhajinhua caps the number of raises per round (PROTOCOL §7.14). */
+    const ZJH_MAX_RAISES = 5
 
     /** Dou Dizhu rank order: 3 < 4 < … < 2 < 小王 < 大王. */
     const DDZ_RANK_ORDER = {
@@ -147,6 +159,9 @@ window.__ModuleLoader__.load({
       'invalid-autofillbots': '自动补齐开关不合法：需要布尔值。',
       'invalid-fillbots': '人机补位开关必须是一个布尔值。',
       'bad-cards': '牌型不合法，或者压不过上家；换一手再试。',
+      'no-chips': '筹码不足，跟不了这一注。',
+      'compare-unavailable': '现在不能比牌：场上还有不止 2 个人没弃牌。',
+      'raise-cap': '本局加注次数已用完（最多 5 次）。',
       'must-play': '轮到你领出，必须出牌，不能不要。',
       'bad-phase': '现在不是这个阶段，做不了这个操作。',
       'invalid-game': '不认识的玩法，只支持 21 点和斗地主。',
@@ -382,6 +397,36 @@ window.__ModuleLoader__.load({
       gdRoundOver: '本局结束',
       gdOrdersTitle: '名次',
       noPlayersGuandan: '人数不足：掼蛋需要 4 人',
+      zjhTitle: '炸金花 · 第 {n} 局',
+      zjhTitleIdle: '炸金花 · 未开局',
+      zjhCapsule: '炸金花 · 第 {n} 局',
+      zjhCapsuleIdle: '炸金花 · 未开局',
+      zjhPot: '底池 {n}',
+      zjhCurrentBet: '当前注 {n}',
+      zjhRaises: '加注 {n}/{max}',
+      zjhChips: '筹码 {n}',
+      zjhBet: '本局 {n}',
+      zjhBlind: '闷牌',
+      zjhSeen: '已看牌',
+      zjhFolded: '弃牌',
+      zjhWinTag: '赢',
+      zjhMyArea: '我的牌',
+      zjhLook: '看牌',
+      zjhCall: '跟注 {n}',
+      zjhCallBlind: '跟注 {n}（闷）',
+      zjhRaise: '加注',
+      zjhFold: '弃牌',
+      zjhCompare: '比牌',
+      zjhWin: '你赢了 +{pot}',
+      zjhLose: '你输了',
+      zjhWinner: '赢家：{name}',
+      zjhRoundOver: '本局结束',
+      zjhHintSeen: '轮到你行动',
+      zjhHintBlind: '轮到你行动（闷牌，可先看牌）',
+      zjhWait: '等待 {name} 行动…',
+      zjhHandsTitle: '所有人手牌',
+      zjhUnseen: '未亮牌',
+      noPlayersZjh: '人数不足：炸金花需要 2 人',
     }
 
     /** Tiny `{name}` interpolator for the copy above. */
@@ -557,7 +602,10 @@ window.__ModuleLoader__.load({
 
     /** Normalize an untrusted game id (PROTOCOL §7.1/§7.7). */
     function gameOf(value) {
-      return value === 'doudizhu' || value === 'paodekuai' || value === 'guandan' ? value : DEFAULT_GAME
+      return value === 'doudizhu' || value === 'paodekuai' || value === 'guandan'
+        || value === 'zhajinhua'
+        ? value
+        : DEFAULT_GAME
     }
 
     /** Human label for one game id. */
@@ -574,7 +622,9 @@ window.__ModuleLoader__.load({
     function phaseLabelFor(game, phase) {
       const labels = game === 'doudizhu'
         ? DDZ_PHASES
-        : (game === 'paodekuai' ? PDK_PHASES : (game === 'guandan' ? GD_PHASES : PHASES))
+        : (game === 'paodekuai'
+          ? PDK_PHASES
+          : (game === 'guandan' ? GD_PHASES : (game === 'zhajinhua' ? ZJH_PHASES : PHASES)))
       return labels[phase] !== undefined ? labels[phase] : phase
     }
 
@@ -583,6 +633,7 @@ window.__ModuleLoader__.load({
       if (game === 'doudizhu') return round > 0 ? fmt(zh.ddzTitle, { n: round }) : zh.ddzTitleIdle
       if (game === 'paodekuai') return round > 0 ? fmt(zh.pkTitle, { n: round }) : zh.pkTitleIdle
       if (game === 'guandan') return round > 0 ? fmt(zh.gdTitle, { n: round }) : zh.gdTitleIdle
+      if (game === 'zhajinhua') return round > 0 ? fmt(zh.zjhTitle, { n: round }) : zh.zjhTitleIdle
       return round > 0 ? fmt(zh.tableTitle, { n: round }) : zh.tableTitleIdle
     }
 
@@ -591,6 +642,7 @@ window.__ModuleLoader__.load({
       if (game === 'doudizhu') return round > 0 ? fmt(zh.ddzCapsule, { n: round }) : zh.ddzCapsuleIdle
       if (game === 'paodekuai') return round > 0 ? fmt(zh.pkCapsule, { n: round }) : zh.pkCapsuleIdle
       if (game === 'guandan') return round > 0 ? fmt(zh.gdCapsule, { n: round }) : zh.gdCapsuleIdle
+      if (game === 'zhajinhua') return round > 0 ? fmt(zh.zjhCapsule, { n: round }) : zh.zjhCapsuleIdle
       return round > 0 ? fmt(zh.capsule, { n: round }) : zh.capsuleIdle
     }
 
@@ -695,10 +747,11 @@ window.__ModuleLoader__.load({
       // Pao De Kuai's must-play rule reads differently from Doudizhu's: there
       // it means "you can beat this, so you must" (PROTOCOL §7.6).
       if (trimmed === 'must-play' && (game === 'paodekuai' || game === 'guandan')) return zh.pkMustPlay
-      // Dou Dizhu / Pao De Kuai need 3 seats (Guandan needs 4); short tables
-      // report `no-players`.
+      // Dou Dizhu / Pao De Kuai need 3 seats (Guandan 4, Zhajinhua 2); short
+      // tables report `no-players`.
       if (trimmed === 'no-players') {
         if (game === 'guandan') return zh.noPlayersGuandan
+        if (game === 'zhajinhua') return zh.noPlayersZjh
         if (isCardGameId(game)) return zh.noPlayersCard
       }
       return ERROR_TEXT[trimmed] !== undefined ? ERROR_TEXT[trimmed] : fmt(zh.actionFailedWith, { reason: trimmed })
@@ -1299,6 +1352,243 @@ window.__ModuleLoader__.load({
           disabled: busy || connectionBroken || mustPlay,
           onClick: () => props.passTurn(),
         }, zh.ddzPass))
+      }
+      if (role === 'host' && (phase === 'idle' || phase === 'result')) {
+        actionNodes.push(h('button', {
+          key: 'start',
+          type: 'button',
+          className: 'dsh-card-lan-button dsh-card-lan-button-primary',
+          disabled: busy || connectionBroken,
+          onClick: () => void props.startRound(),
+        }, phase === 'result' ? zh.ddzNextRound : zh.ddzStart))
+      }
+
+      return { headExtras, hint, bodyNodes, actionNodes }
+    }
+
+    /**
+     * Zhajinhua table body (PROTOCOL §7.14/§7.15): 2–6 seats, 3 hole cards,
+     * a betting round (pot/currentBet/raises) and a public showdown.
+     * A pure renderer like buildCardGameContent: writes go through callbacks.
+     */
+    function buildZhajinhuaContent(props) {
+      const role = props.role
+      const isSpectator = props.isSpectator === true
+      const phase = props.phase
+      const players = props.players
+      const me = props.me
+      const myNode = asString(props.myNode, '')
+      const turnNode = asString(props.turnNode, '')
+      const turnNick = asString(props.turnNick, '')
+      const myCards = asArray(props.myCards).filter((card) => typeof card === 'string')
+      const pot = Math.max(0, asNumber(props.pot, 0))
+      const currentBet = Math.max(0, asNumber(props.currentBet, 0))
+      const raises = Math.max(0, asNumber(props.raises, 0))
+      const maxRaises = Math.max(1, asNumber(props.maxRaises, ZJH_MAX_RAISES))
+      const busy = props.busy === true
+      const connectionBroken = props.connectionBroken === true
+      const turnRemainingMs = asNumber(props.turnRemainingMs, -1)
+      const winnerNode = asString(props.winnerNode, '')
+      const meSeen = me !== undefined && me.seen === true
+      const meStatus = me !== undefined ? asString(me.status, 'active') : 'active'
+      const activeTurn = !isSpectator && myNode !== '' && turnNode === myNode
+      const myChips = me !== undefined ? Math.max(0, asNumber(me.chips, 0)) : 0
+      const myBet = me !== undefined ? Math.max(0, asNumber(me.bet, 0)) : 0
+      // `call` costs the current bet when seen; blind players pay half (rounded up).
+      const callAmount = meSeen ? currentBet : Math.ceil(currentBet / 2)
+      const aliveCount = players.filter((slot) => {
+        const status = asString(slot.status, 'active')
+        return status !== 'folded' && status !== 'out'
+      }).length
+      const canCompare = !isSpectator && activeTurn && meStatus !== 'folded'
+        && meStatus !== 'out' && aliveCount === 2
+
+      /* ---------- header extras: game pill, pot, current bet, raises ---------- */
+      const headExtras = [
+        h('span', { key: 'game', className: 'dsh-card-lan-pill is-game-zhajinhua' }, GAME_LABELS.zhajinhua),
+        h('span', { key: 'pot', className: 'dsh-card-lan-tag is-pot' }, fmt(zh.zjhPot, { n: pot })),
+        h('span', { key: 'bet', className: 'dsh-card-lan-tag' }, fmt(zh.zjhCurrentBet, { n: currentBet })),
+        h('span', { key: 'raises', className: 'dsh-card-lan-tag is-raises' },
+          fmt(zh.zjhRaises, { n: raises, max: maxRaises })),
+      ]
+      if (phase === 'bidding' && turnRemainingMs >= 0) {
+        headExtras.push(h('span', { key: 'countdown', className: 'dsh-card-lan-tag is-turn' },
+          fmt(zh.ddzCountdown, { n: Math.max(0, Math.ceil(turnRemainingMs / 1000)) })))
+      }
+
+      /* ---------- hint line ---------- */
+      let hint = ''
+      if (isSpectator) {
+        hint = zh.spectatorHint
+      } else if (phase === 'idle') {
+        hint = role === 'host' ? zh.ddzIdleHost : zh.ddzWaitStart
+      } else if (phase === 'bidding') {
+        if (activeTurn) hint = meSeen ? zh.zjhHintSeen : zh.zjhHintBlind
+        else hint = turnNick !== '' ? fmt(zh.zjhWait, { name: turnNick }) : zh.ddzWaitHostState
+      } else if (phase === 'result') {
+        hint = role === 'host' ? zh.ddzResultHost : zh.ddzWaitNext
+      }
+
+      const bodyNodes = []
+
+      /* ---------- other seats: chips / round bet / status / turn ---------- */
+      const others = players.filter((slot) => slot !== me)
+      for (const slot of others) {
+        const node = asString(slot.node, '')
+        const nick = asString(slot.nick, '玩家')
+        const chips = Math.max(0, asNumber(slot.chips, 0))
+        const bet = Math.max(0, asNumber(slot.bet, 0))
+        const status = asString(slot.status, 'active')
+        const folded = status === 'folded' || status === 'out'
+        const seen = slot.seen === true
+        const won = phase === 'result' && winnerNode !== '' && node === winnerNode
+        const isTurn = phase === 'bidding' && node !== '' && node === turnNode
+        const classes = ['dsh-card-lan-row', 'dsh-card-lan-zjh-seat']
+        if (isTurn) classes.push('is-turn')
+        if (folded) classes.push('is-out')
+        if (won) classes.push('is-winner')
+        const tags = [
+          h('span', { key: 'chips', className: 'dsh-card-lan-tag' }, fmt(zh.zjhChips, { n: chips })),
+          h('span', { key: 'bet', className: 'dsh-card-lan-tag' }, fmt(zh.zjhBet, { n: bet })),
+        ]
+        if (won) {
+          tags.push(h('span', { key: 'win', className: 'dsh-card-lan-tag is-result-win' }, zh.zjhWinTag))
+        } else if (folded) {
+          tags.push(h('span', { key: 'folded', className: 'dsh-card-lan-tag' }, zh.zjhFolded))
+        } else if (phase === 'bidding') {
+          tags.push(h('span', {
+            key: 'seen',
+            className: 'dsh-card-lan-tag' + (seen ? ' is-seen' : ''),
+          }, seen ? zh.zjhSeen : zh.zjhBlind))
+        }
+        if (isTurn) tags.push(h('span', { key: 'turn', className: 'dsh-card-lan-tag is-turn' }, zh.acting))
+        bodyNodes.push(h('div', { key: 'seat:' + node + ':' + nick, className: classes.join(' ') }, [
+          h('span', { key: 'nick', className: 'dsh-card-lan-name' }, nick),
+          ...tags,
+        ]))
+      }
+
+      /* ---------- my area: 3 cards (backs until seen; faces at result) ---------- */
+      // Spectators never see hole cards (not even backs) during the hand;
+      // the showdown block below reveals everyone once the round is over.
+      if (!isSpectator) {
+        const showFaces = phase === 'result' || meSeen
+        const myCardNodes = []
+        for (let index = 0; index < 3; index += 1) {
+          const card = myCards[index]
+          if (showFaces && typeof card === 'string' && card !== '') {
+            myCardNodes.push(h(CardChip, { key: 'my:' + index, card }))
+          } else {
+            myCardNodes.push(h(CardChip, { key: 'my:' + index, hidden: true }))
+          }
+        }
+        bodyNodes.push(h('div', { key: 'mySeat', className: 'dsh-card-lan-zjh-me' }, [
+          h('div', { key: 'head', className: 'dsh-card-lan-row-head' }, [
+            h('span', { key: 'label', className: 'dsh-card-lan-label' }, zh.zjhMyArea),
+            h('span', { key: 'chips', className: 'dsh-card-lan-tag' }, fmt(zh.zjhChips, { n: myChips })),
+            h('span', { key: 'bet', className: 'dsh-card-lan-tag' }, fmt(zh.zjhBet, { n: myBet })),
+            meSeen ? h('span', { key: 'seen', className: 'dsh-card-lan-tag is-seen' }, zh.zjhSeen) : null,
+            activeTurn ? h('span', { key: 'turn', className: 'dsh-card-lan-tag is-turn' }, zh.acting) : null,
+          ]),
+          h('div', { key: 'cards', className: 'dsh-card-lan-hand dsh-card-lan-zjh-hand' }, myCardNodes),
+        ]))
+      }
+
+      /* ---------- result: banner + everyone's revealed hands ---------- */
+      if (phase === 'result') {
+        const winner = players.find((slot) => asString(slot.node, '') === winnerNode)
+        const winnerNick = winner !== undefined ? asString(winner.nick, '玩家') : ''
+        let bannerText = zh.zjhRoundOver
+        let bannerClass = 'dsh-card-lan-banner is-none'
+        if (isSpectator) {
+          if (winnerNick !== '') bannerText = fmt(zh.zjhWinner, { name: winnerNick })
+        } else if (myNode !== '' && winnerNode !== '' && myNode === winnerNode) {
+          bannerText = fmt(zh.zjhWin, { pot })
+          bannerClass = 'dsh-card-lan-banner is-win'
+        } else if (winnerNode !== '') {
+          bannerText = zh.zjhLose
+          bannerClass = 'dsh-card-lan-banner is-lose'
+        }
+        bodyNodes.push(h('div', { key: 'result', className: bannerClass, role: 'status' }, bannerText))
+
+        const handLines = []
+        for (let index = 0; index < players.length; index += 1) {
+          const slot = players[index]
+          const node = asString(slot.node, '')
+          const nick = asString(slot.nick, '玩家')
+          let cards = asArray(slot.cards).filter((card) => typeof card === 'string' && card !== '')
+          if (cards.length === 0 && slot === me) cards = myCards
+          const won = node !== '' && node === winnerNode
+          const status = asString(slot.status, 'active')
+          const folded = status === 'folded' || status === 'out'
+          const lineClass = 'dsh-card-lan-zjh-handline'
+            + (won ? ' is-winner' : '')
+            + (folded ? ' is-out' : '')
+          const cardNodes = cards.length > 0
+            ? cards.map((card, cardIndex) => h(CardChip, { key: 'c' + cardIndex, card }))
+            : [h('span', { key: 'empty', className: 'dsh-card-lan-empty' }, zh.zjhUnseen)]
+          handLines.push(h('div', { key: 'hand:' + index + ':' + node, className: lineClass }, [
+            h('span', { key: 'nick', className: 'dsh-card-lan-zjh-handnick' }, nick),
+            h('span', { key: 'cards', className: 'dsh-card-lan-hand' }, cardNodes),
+            won ? h('span', { key: 'win', className: 'dsh-card-lan-tag is-result-win' }, zh.zjhWinTag) : null,
+          ]))
+        }
+        bodyNodes.push(h('div', { key: 'hands', className: 'dsh-card-lan-zjh-hands' }, [
+          h('div', { key: 'title', className: 'dsh-card-lan-label' }, zh.zjhHandsTitle),
+          ...handLines,
+        ]))
+      }
+
+      /* ---------- actions: look / call / raise / fold / compare / start ---------- */
+      const actionNodes = []
+      if (phase === 'bidding' && activeTurn && !isSpectator) {
+        if (!meSeen) {
+          actionNodes.push(h('button', {
+            key: 'look',
+            type: 'button',
+            className: 'dsh-card-lan-button dsh-card-lan-button-primary',
+            disabled: busy || connectionBroken,
+            onClick: () => void props.lookCards(),
+          }, zh.zjhLook))
+          actionNodes.push(h('button', {
+            key: 'call',
+            type: 'button',
+            className: 'dsh-card-lan-button',
+            disabled: busy || connectionBroken,
+            onClick: () => void props.callBet(),
+          }, fmt(zh.zjhCallBlind, { n: callAmount })))
+        } else {
+          actionNodes.push(h('button', {
+            key: 'call',
+            type: 'button',
+            className: 'dsh-card-lan-button dsh-card-lan-button-primary',
+            disabled: busy || connectionBroken,
+            onClick: () => void props.callBet(),
+          }, fmt(zh.zjhCall, { n: callAmount })))
+          actionNodes.push(h('button', {
+            key: 'raise',
+            type: 'button',
+            className: 'dsh-card-lan-button',
+            disabled: busy || connectionBroken,
+            onClick: () => void props.raiseBet(),
+          }, zh.zjhRaise))
+        }
+        actionNodes.push(h('button', {
+          key: 'fold',
+          type: 'button',
+          className: 'dsh-card-lan-button',
+          disabled: busy || connectionBroken,
+          onClick: () => void props.foldHand(),
+        }, zh.zjhFold))
+        if (canCompare) {
+          actionNodes.push(h('button', {
+            key: 'compare',
+            type: 'button',
+            className: 'dsh-card-lan-button',
+            disabled: busy || connectionBroken,
+            onClick: () => void props.compareHand(),
+          }, zh.zjhCompare))
+        }
       }
       if (role === 'host' && (phase === 'idle' || phase === 'result')) {
         actionNodes.push(h('button', {
@@ -2436,6 +2726,7 @@ window.__ModuleLoader__.load({
       const isDdz = game === 'doudizhu'
       const isPdk = game === 'paodekuai'
       const isGuandan = game === 'guandan'
+      const isZjh = game === 'zhajinhua'
       const isCardGame = isCardGameId(game)
       const phase = asString(table.phase, 'idle')
       const round = Math.max(0, asNumber(table.round, 0))
@@ -2574,6 +2865,13 @@ window.__ModuleLoader__.load({
       const resetOverlayPosition = () => {
         void applyOverlayConfig({ overlayX: null, overlayY: null }, zh.resetPositionDone)
       }
+
+      /** Zhajinhua writes (PROTOCOL §7.14): look / call / raise / fold / compare. */
+      const lookCards = () => act({ type: 'look' })
+      const callBet = () => act({ type: 'call' })
+      const raiseBet = () => act({ type: 'raise' })
+      const foldHand = () => act({ type: 'fold' })
+      const compareHand = () => act({ type: 'compare' })
 
       /** Card-game writes (PROTOCOL §7.3/§7.6/§7.12): bid / play / pass / start. */
       const toggleCard = (index) => {
@@ -2728,9 +3026,43 @@ window.__ModuleLoader__.load({
         })
         : null
 
+      // Zhajinhua view fields (PROTOCOL §7.14); ignored by the other games.
+      const zjhMyCards = isZjh
+        ? asArray(table.myCards).filter((card) => typeof card === 'string' && card !== '')
+        : []
+      const bettingGame = isZjh
+        ? buildZhajinhuaContent({
+          role,
+          isSpectator,
+          phase,
+          players,
+          me,
+          myNode,
+          turnNode,
+          turnNick,
+          myCards: zjhMyCards,
+          pot: Math.max(0, asNumber(table.pot, 0)),
+          currentBet: Math.max(0, asNumber(table.currentBet, 0)),
+          raises: Math.max(0, asNumber(table.raises, 0)),
+          maxRaises: ZJH_MAX_RAISES,
+          winnerNode: asString(table.winnerNode, ''),
+          busy,
+          connectionBroken,
+          turnRemainingMs,
+          lookCards,
+          callBet,
+          raiseBet,
+          foldHand,
+          compareHand,
+          startRound,
+        })
+        : null
+
       let hint = ''
       if (isCardGame) {
         hint = cardGame.hint
+      } else if (bettingGame !== null) {
+        hint = bettingGame.hint
       } else if (isSpectator) {
         hint = zh.spectatorHint
       } else if (phase === 'playing') {
@@ -2800,7 +3132,7 @@ window.__ModuleLoader__.load({
             className: 'dsh-card-lan-title',
           }, gameTitleOf(game, round)),
           h('span', { key: 'phase', className: 'dsh-card-lan-pill is-' + phase }, phaseLabel),
-          ...(isCardGame ? cardGame.headExtras : []),
+          ...(isCardGame ? cardGame.headExtras : (bettingGame !== null ? bettingGame.headExtras : [])),
           isSpectator
             ? h('span', { key: 'spectator', className: 'dsh-card-lan-pill is-spectator' }, zh.spectatorBadge)
             : null,
@@ -3003,12 +3335,16 @@ window.__ModuleLoader__.load({
       const bodyChildren = []
       if (isCardGame) {
         for (const node of cardGame.bodyNodes) bodyChildren.push(node)
+      } else if (bettingGame !== null) {
+        for (const node of bettingGame.bodyNodes) bodyChildren.push(node)
       } else {
         bodyChildren.push(dealerBlock)
         for (const row of rows) bodyChildren.push(row)
         if (bjResultBanner !== null) bodyChildren.push(bjResultBanner)
       }
-      const finalActions = isCardGame ? cardGame.actionNodes : bjActionNodes
+      const finalActions = isCardGame
+        ? cardGame.actionNodes
+        : (bettingGame !== null ? bettingGame.actionNodes : bjActionNodes)
       if (finalActions.length > 0) {
         bodyChildren.push(h('div', { key: 'actions', className: 'dsh-card-lan-actions' }, finalActions))
       }
@@ -3185,6 +3521,22 @@ window.__ModuleLoader__.load({
       '.dsh-card-lan-row.is-win{border-left:3px solid rgba(34,197,94,.7)}',
       '.dsh-card-lan-row.is-lose{border-left:3px solid rgba(239,68,68,.7)}',
       '.dsh-card-lan-row.is-push{border-left:3px solid rgba(148,163,184,.7)}',
+      '.dsh-card-lan-row.is-winner{border-color:rgba(34,197,94,.55);',
+      'box-shadow:inset 0 0 0 1px rgba(34,197,94,.3),0 0 14px rgba(34,197,94,.14)}',
+      '.dsh-card-lan-tag.is-pot{background:rgba(16,185,129,.16);border-color:rgba(16,185,129,.4);color:#34d399}',
+      '.dsh-card-lan-tag.is-raises{background:rgba(245,158,11,.14);color:#fbbf24}',
+      '.dsh-card-lan-tag.is-seen{background:rgba(56,189,248,.16);color:#7dd3fc}',
+      '.dsh-card-lan-tag.is-game-zhajinhua{background:rgba(251,113,133,.16);border-color:rgba(251,113,133,.4);color:#fb7185}',
+      '.dsh-card-lan-pill.is-game-zhajinhua{background:rgba(251,113,133,.16);border-color:rgba(251,113,133,.45);color:#fb7185}',
+      '.dsh-card-lan-zjh-me{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border-radius:10px;',
+      'background:var(--dsw-alias-bg-layer-2,rgba(30,41,59,.55));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.25))}',
+      '.dsh-card-lan-zjh-hand{gap:6px;padding:2px 0;min-height:44px}',
+      '.dsh-card-lan-zjh-hands{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border-radius:8px;',
+      'background:var(--dsw-alias-bg-layer-1,rgba(15,23,42,.35));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.2))}',
+      '.dsh-card-lan-zjh-handline{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px}',
+      '.dsh-card-lan-zjh-handline.is-out{opacity:.55}',
+      '.dsh-card-lan-zjh-handline.is-winner{color:#4ade80}',
+      '.dsh-card-lan-zjh-handnick{min-width:56px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dsh-card-lan-row-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
       '.dsh-card-lan-name{font-weight:600;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dsh-card-lan-hand{display:flex;align-items:center;gap:5px;flex-wrap:wrap;min-height:40px}',

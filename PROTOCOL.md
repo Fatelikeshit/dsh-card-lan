@@ -325,9 +325,9 @@ window.__ModuleLoader__.load({
 
 ### 7.1 配置与开桌
 
-- `config.game`：`"blackjack" | "doudizhu" | "paodekuai" | "guandan"`，默认 `"blackjack"`，表示下次「创建牌桌」的玩法（持久化）。
+- `config.game`：`"blackjack" | "doudizhu" | "paodekuai" | "guandan" | "zhajinhua"`，默认 `"blackjack"`，表示下次「创建牌桌」的玩法（持久化）。
 - `view.config.game` 暴露。
-- `action { "type":"open", "game"?: "blackjack"|"doudizhu"|"paodekuai"|"guandan" }`：带 `game` 时先写回 `config.game` 再开桌；非法 → `{ok:false,error:"invalid-game"}`。不带则用 `config.game`。
+- `action { "type":"open", "game"?: "blackjack"|"doudizhu"|"paodekuai"|"guandan"|"zhajinhua" }`：带 `game` 时先写回 `config.game` 再开桌；非法 → `{ok:false,error:"invalid-game"}`。不带则用 `config.game`。
 - `hello.table` 增加 `game` 字段，发现列表按玩法显示（21 点 / 斗地主）。
 - `view.table.game` 必填（两种玩法都带）；21 点的 table 结构不变。
 
@@ -517,6 +517,33 @@ window.__ModuleLoader__.load({
 - 牌桌 4 座：显示昵称、队伍标记（我方/对方）、剩余张数、当前回合高亮、出完顺序/结果；顶部显示当前级牌与双方级数（如「打 2 · 我方 2 / 对方 2」）。
 - 我的手牌 27 张：可点选（多行/换行排列），红桃级牌带「配」标记；出牌/不要；领出提示；结算横幅「本局 +N 级」或「过 A，胜利」。
 - 浮层宽度需比 3 人玩法更宽（可用 large 或按 27 张自适应换行）。
+
+### 7.14 炸金花（v8.0）
+
+2–6 人、1 副 52 张，每人 3 张暗牌；无机器人补位。
+
+- **筹码**：起始 1000/人（首次坐下或不足时自动补到 1000），每局底注 10；底池 `pot`。宿主记账，局间筹码延续。
+- **牌型与大小**：豹子（三张同点）> 顺金（同花顺）> 金花（同花）> 顺子（含 A23，A23 最小、AKQ 最大）> 对子 > 单张；同型比点数（对子先比对子再比单张，单张按 A>K>…>2）。**不启用 235 吃豹子特例**。
+- **流程**：每人先交底注进底池；从座位 0（首局）/上局赢家（后续）开始轮流行动。行动：
+  - `look` 看牌：把自己 3 张牌变为可见；不消耗行动（仍在自己的回合，可看完再跟/加/弃/比）；
+  - `call` 跟注：已看牌付 `currentBet`，未看牌（闷牌）付 `ceil(currentBet/2)`；
+  - `raise` 加注：仅已看牌可加；加注后 `currentBet += 10`，本局加注次数 +1（上限 5 次，超过 → `raise-cap`）；
+  - `fold` 弃牌：出局（手牌作废）；
+  - `compare` 比牌：**仅当场上只剩 2 名未弃牌玩家**时可发起；付跟注额，双方亮牌比较，输者出局、平局发起方输；剩 1 人即结算。
+- **强制摊牌**：所有人各行动一轮计 1 轮；打满 **3 轮** 仍未结束 → 剩余玩家全部摊牌比较，最大者赢。
+- **结算**：只剩 1 人或摊牌后，赢家拿走 `pot`；`phase="result"`，显示所有人手牌与赢家。下局重新发牌、重新交底注；筹码不足 10 自动补到 1000。
+- **超时**：轮到谁超时自动 `fold`。
+- 动作错误码：`not-your-turn`、`bad-phase`、`bad-action`（未知动作）、`no-chips`（筹码不足）、`compare-unavailable`（不止 2 人）、`raise-cap`（加注次数用尽）。
+- `view.table`：`game/role/hostNode/phase(idle|bidding|result)/round/turn/pot/currentBet/raises/myCards(仅自己看牌后或 result)/players(node,nick,self,chips,bet,status(active|folded|out),seen,result)/log/scores/staleMs/turnRemainingMs`；`result` 时带 `winnerNode`。
+
+### 7.15 炸金花 UI（v8.0）
+
+- 大厅玩法选择增加「炸金花」；发现列表显示标签。
+- 牌桌：顶部「炸金花 · 第 N 局」、阶段、底池 `pot`、当前注 `currentBet`、加注次数/上限、回合倒计时；
+- 玩家行：昵称、筹码、本局投入、状态（已看牌/闷牌/弃牌/赢）、当前回合高亮；
+- 我的区域：3 张牌（未看牌显示背面，`看牌` 后翻开）、筹码/本局投入、按钮 `看牌`（未看）/`跟注 {amount}`/`加注`/`弃牌`（只剩 2 人时）`比牌`；
+- 结算：「你赢了 +{pot}」/「你输了」，显示所有人手牌；房主「开始下一局」；
+- 观战者不显示任何人的暗牌（result 时可见全部），无操作按钮。
 
 ## 8. 验收补充（v4）
 
