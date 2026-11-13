@@ -1,8 +1,9 @@
 {
   "name": "dsh-card-lan",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "局域网牌桌：21 点 / 斗地主 / 跑得快，UDP 房间发现 + 房主权威牌局，支持密码/观战/掉线重连。",
+  "icon": "icon.svg",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -16,6 +17,8 @@
     "lib/games/paodekuai.js",
     "client.js",
     "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
     "README.md"
   ],
   "dsh": {
