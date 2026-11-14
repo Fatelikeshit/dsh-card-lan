@@ -70,7 +70,7 @@ window.__ModuleLoader__.load({
     const MAX_TURN_TIMEOUT = 300
 
     /** Bot back-fill bounds (PROTOCOL.md §7.8 config.botCount): 0..2. */
-    const MAX_BOT_COUNT = 2
+    const MAX_BOT_COUNT = 5
 
     /** Card suits: spades/clubs ink, hearts/diamonds red (engine.js encoding). */
     const SUIT_GLYPHS = { S: '♠', H: '♥', D: '♦', C: '♣' }
@@ -179,7 +179,7 @@ window.__ModuleLoader__.load({
       'reconnect-failed': '与房主的连接已断开，重连失败；可以点「重新连接」再试一次。',
       'no-target': '没有可重连的房主信息，请重新加入牌桌。',
       'invalid-turn-timeout': '回合超时必须是 0–300 的整数秒。',
-      'invalid-botcount': '机器人数量不合法：只能是 0、1 或 2。',
+      'invalid-botcount': '机器人数量不合法：只能是 0–5。',
       'invalid-autofillbots': '自动补齐开关不合法：需要布尔值。',
       'invalid-fillbots': '人机补位开关必须是一个布尔值。',
       'bad-cards': '牌型不合法，或者压不过上家；换一手再试。',
@@ -242,11 +242,10 @@ window.__ModuleLoader__.load({
       spectatorEnabledHint: '开启后别人可以不占座位、只看牌局。',
       botCount: '机器人数量',
       botCountNone: '不补',
-      botCountOne: '1 个',
-      botCountTwo: '2 个',
+      botCountN: '{n} 个',
       autoFillBots: '自动补齐',
-      autoFillBotsHint: '人数不足时自动补满 3 人',
-      botCountHint: '自动补齐：人数不足时自动补满 3 人；关闭后按「机器人数量」补位（最多 2 个）；后加入的真人会顶掉机器人；21 点不受影响。',
+      autoFillBotsHint: '开启后按玩法推荐人数补满',
+      botCountHint: '按玩法推荐人数自动补齐（斗地主/跑得快 3 人、掼蛋/炸金花/德州 4 人）；后加入的真人会顶掉机器人；21 点与日麻暂不支持。',
       noPlayersCard: '人数不足：斗地主/跑得快需要 3 人',
       botTag: '🤖 机器人',
       turnTimeout: '回合超时（秒）',
@@ -1798,6 +1797,9 @@ window.__ModuleLoader__.load({
           h('span', { key: 'chips', className: 'dsh-card-lan-tag' }, fmt(zh.zjhChips, { n: chips })),
           h('span', { key: 'bet', className: 'dsh-card-lan-tag' }, fmt(zh.zjhBet, { n: bet })),
         ]
+        if (slot.bot === true) {
+          tags.push(h('span', { key: 'bot', className: 'dsh-card-lan-bot-tag', title: zh.botTag }, zh.botTag))
+        }
         if (won) {
           tags.push(h('span', { key: 'win', className: 'dsh-card-lan-tag is-result-win' }, zh.zjhWinTag))
         } else if (folded) {
@@ -2055,6 +2057,9 @@ window.__ModuleLoader__.load({
           h('span', { key: 'chips', className: 'dsh-card-lan-tag' }, fmt(zh.txChips, { n: chips })),
           h('span', { key: 'bet', className: 'dsh-card-lan-tag' }, fmt(zh.txStreetBet, { n: bet })),
         ]
+        if (slot.bot === true) {
+          tags.push(h('span', { key: 'bot', className: 'dsh-card-lan-bot-tag', title: zh.botTag }, zh.botTag))
+        }
         if (node !== '' && node === dealerNode) {
           tags.push(h('span', { key: 'dealer', className: 'dsh-card-lan-tag is-tx-d', title: 'dealer' }, zh.txDealerMark))
         }
@@ -3686,8 +3691,10 @@ window.__ModuleLoader__.load({
               onChange: (event) => changeBotCount(Number(event.target.value)),
             }, [
               h('option', { key: '0', value: '0' }, zh.botCountNone),
-              h('option', { key: '1', value: '1' }, zh.botCountOne),
-              h('option', { key: '2', value: '2' }, zh.botCountTwo),
+              ...[1, 2, 3, 4, 5].map((count) => h('option', {
+                key: String(count),
+                value: String(count),
+              }, fmt(zh.botCountN, { n: count }))),
             ]),
             h('span', { key: 'hint', className: 'dsh-card-lan-muted dsh-card-lan-small' }, zh.botCountHint),
           ]),

@@ -14,6 +14,26 @@ import {
   snapshot as pdkSnapshot,
   startRound as pdkStartRound,
 } from '../lib/games/paodekuai.js'
+import {
+  applyAction as applyGd,
+  botAction as gdBotAction,
+  createTable as gdCreateTable,
+  onTimeout as gdOnTimeout,
+  snapshot as gdSnapshot,
+  startRound as gdStartRound,
+} from '../lib/games/guandan.js'
+import {
+  applyAction as applyZjh,
+  botAction as zjhBotAction,
+  createTable as zjhCreateTable,
+  startRound as zjhStartRound,
+} from '../lib/games/zhajinhua.js'
+import {
+  applyAction as applyTx,
+  botAction as txBotAction,
+  createTable as txCreateTable,
+  startRound as txStartRound,
+} from '../lib/games/texas.js'
 
 /** Deterministic rng (mulberry32). */
 function seeded(seed) {
@@ -101,4 +121,62 @@ test('paodekuai snapshot exposes the bot flag', () => {
   pdkStartRound(state, seeded(5))
   const viewer = pdkSnapshot(state, 'bot-1', { role: 'player', hostNode: 'node-a', staleMs: 0, turnRemainingMs: 30000 })
   assert.equal(viewer.players.find((player) => player.self === true).bot, true)
+})
+
+function seatsN(count) {
+  return ['node-a', 'node-b', 'node-c', 'node-d', 'node-e', 'node-f']
+    .slice(0, count)
+    .map((node, index) => ({ node, nick: '机器人' + (index + 1) }))
+}
+
+test('guandan bots play a whole round with legal actions', () => {
+  const state = gdCreateTable(seatsN(4))
+  assert.equal(gdStartRound(state, seeded(5)).ok, true)
+  let guard = 0
+  while (state.phase !== 'result' && guard < 4000) {
+    guard += 1
+    const node = state.turn
+    assert.ok(node)
+    const action = gdBotAction(state, node) ?? gdOnTimeout(state, node)
+    assert.ok(action !== null)
+    const result = applyGd(state, node, action)
+    assert.equal(result.ok, true, JSON.stringify(result) + ' ' + JSON.stringify(action))
+  }
+  assert.equal(state.phase, 'result')
+  const view = gdSnapshot(state, 'node-a', { role: 'player', hostNode: 'node-a', staleMs: 0, turnRemainingMs: 30000 })
+  assert.equal(view.orders.length, 4)
+})
+
+test('zhajinhua bots bet, call and settle a whole hand', () => {
+  const state = zjhCreateTable(seatsN(3))
+  assert.equal(zjhStartRound(state, seeded(7)).ok, true)
+  let guard = 0
+  while (state.phase !== 'result' && guard < 600) {
+    guard += 1
+    const node = state.turn
+    assert.ok(node)
+    const action = zjhBotAction(state, node)
+    assert.ok(action !== null)
+    const result = applyZjh(state, node, action)
+    assert.equal(result.ok, true, JSON.stringify(result) + ' ' + JSON.stringify(action))
+  }
+  assert.equal(state.phase, 'result')
+  assert.equal(state.players.reduce((sum, player) => sum + player.chips, 0), 3000)
+})
+
+test('texas bots play streets and settle a whole hand', () => {
+  const state = txCreateTable(seatsN(3))
+  assert.equal(txStartRound(state, seeded(9)).ok, true)
+  let guard = 0
+  while (state.phase !== 'result' && guard < 800) {
+    guard += 1
+    const node = state.turn
+    assert.ok(node)
+    const action = txBotAction(state, node)
+    assert.ok(action !== null)
+    const result = applyTx(state, node, action)
+    assert.equal(result.ok, true, JSON.stringify(result) + ' ' + JSON.stringify(action))
+  }
+  assert.equal(state.phase, 'result')
+  assert.equal(state.players.reduce((sum, player) => sum + player.chips, 0), 3000)
 })
