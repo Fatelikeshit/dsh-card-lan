@@ -192,6 +192,8 @@ window.__ModuleLoader__.load({
       'not-pending': '现在没有需要你响应的鸣牌。',
       'bad-call': '这个鸣牌动作不合法，或不能这样吃碰杠。',
       'furiten': '振听中，不能荣和。',
+      'bad-riichi': '现在不能立直（需要门清、至少 1000 点且牌墙足够）。',
+      'no-yaku': '无役，不能和了。',
       'must-play': '轮到你领出，必须出牌，不能不要。',
       'bad-phase': '现在不是这个阶段，做不了这个操作。',
       'invalid-game': '不认识的玩法，只支持 21 点和斗地主。',
@@ -561,6 +563,28 @@ window.__ModuleLoader__.load({
       mjAnkanButton: '暗杠 {tile}',
       mjKakanButton: '加杠 {tile}',
       mjFuriten: '振听中（不能荣和）',
+      mjPoints: '点数',
+      mjPointValue: '{n} 点',
+      mjRiichi: '立直',
+      mjRiichiDone: '已立直',
+      mjRiichiAuto: '立直中：自动摸切',
+      mjRiichiSticks: '立直棒 {n}',
+      mjRiichiStickLine: '立直棒 {n} 根归和了者',
+      mjYakuTitle: '役种',
+      mjYakuLine: '{name}（{han} 番）',
+      mjWinnerLine: '和了者：{name}（{type}）',
+      mjTsumoType: '自摸',
+      mjRonType: '荣和',
+      mjFuLine: '{fu} 符',
+      mjHanLine: '{han} 番',
+      mjScoreLine: '{n} 点',
+      mjDorasTitle: '宝牌',
+      mjUraTitle: '里宝',
+      mjAkaTitle: '赤宝 {n}',
+      mjDoraHanLine: '宝牌 {n} 番',
+      mjUraHanLine: '里宝 {n} 番',
+      mjDeltasTitle: '点数变化',
+      mjDeltaLine: '{name} {delta}',
     }
 
     /** Tiny `{name}` interpolator for the copy above. */
@@ -2347,6 +2371,36 @@ window.__ModuleLoader__.load({
       })()
       const result = asString(props.result, '')
       const winnerNode = asString(props.winnerNode, '')
+      // Milestone ③: points / riichi / yaku settlement.
+      const pointsMap = asObject(props.points)
+      const riichiMapIn = asObject(props.riichiMap)
+      const riichiSticks = Math.max(0, asNumber(props.riichiSticks, 0))
+      const autoDiscard = props.autoDiscard === true
+      const yakuList = asArray(props.yaku)
+      const totalHan = asNumber(props.han, -1)
+      const totalFu = asNumber(props.fu, -1)
+      const totalScore = asNumber(props.score, -1)
+      const deltasMap = asObject(props.deltas)
+      const uraDoras = asArray(props.uraDoras).filter((tile) => typeof tile === 'string' && tile !== '')
+      // Optional dora-han breakdowns (the host may expose them; otherwise the
+      // indicator tiles + aka count are still shown).
+      const doraHan = asNumber(props.doraHan, -1)
+      const akaHan = asNumber(props.akaHan, -1)
+      const uraHan = asNumber(props.uraHan, -1)
+      const sticksAwarded = Math.max(0, asNumber(props.sticksAwarded, riichiSticks))
+      const riichiOf = (node) => {
+        if (riichiMapIn !== null && riichiMapIn[node] === true) return true
+        for (const slot of players) {
+          if (asString(slot.node, '') === node && slot.riichi === true) return true
+        }
+        return false
+      }
+      const pointOf = (node) => {
+        if (pointsMap !== null && Number.isFinite(pointsMap[node])) return Math.round(pointsMap[node])
+        return 25000
+      }
+      const myPoints = myNode !== '' ? pointOf(myNode) : 25000
+      const myRiichi = myNode !== '' && riichiOf(myNode)
       const discardsFor = typeof props.discardsFor === 'function' ? props.discardsFor : () => []
       const busy = props.busy === true
       const connectionBroken = props.connectionBroken === true
@@ -2363,6 +2417,10 @@ window.__ModuleLoader__.load({
       for (const tile of myHand) tileCounts[tile] = (tileCounts[tile] || 0) + 1
       const ankanOptions = Object.keys(tileCounts).filter((tile) => tileCounts[tile] >= 4)
       const myMelds = me !== undefined ? asArray(meldsFor(me)) : []
+      const closedHand = myMelds.length === 0
+      const canRiichi = myTurn && !myRiichi && closedHand && !mustDiscard
+        && myHand.length === 14 && myPoints >= 1000 && wall >= 4
+        && !busy && !connectionBroken
       const kakanOptions = []
       for (const meld of myMelds) {
         const entry = asObject(meld)
@@ -2428,6 +2486,13 @@ window.__ModuleLoader__.load({
       if (myFuriten) {
         headExtras.push(h('span', { key: 'furiten', className: 'dsh-card-lan-tag is-mj-furiten' }, zh.mjFuriten))
       }
+      if (myRiichi) {
+        headExtras.push(h('span', { key: 'riichi', className: 'dsh-card-lan-tag is-mj-riichi' }, zh.mjRiichiDone))
+      }
+      if (riichiSticks > 0) {
+        headExtras.push(h('span', { key: 'sticks', className: 'dsh-card-lan-tag is-mj-stick' },
+          fmt(zh.mjRiichiSticks, { n: riichiSticks })))
+      }
       if ((phase === 'playing' || phase === 'calling') && turnRemainingMs >= 0) {
         headExtras.push(h('span', { key: 'countdown', className: 'dsh-card-lan-tag is-turn' },
           fmt(zh.ddzCountdown, { n: Math.max(0, Math.ceil(turnRemainingMs / 1000)) })))
@@ -2443,6 +2508,8 @@ window.__ModuleLoader__.load({
         hint = role === 'host' ? zh.ddzResultHost : zh.ddzWaitNext
       } else if (phase === 'calling') {
         hint = callable ? zh.mjCallBar : zh.mjCallWait
+      } else if (myTurn && myRiichi) {
+        hint = zh.mjRiichiAuto
       } else if (myTurn) {
         hint = zh.mjHintYourTurn
       } else {
@@ -2450,6 +2517,27 @@ window.__ModuleLoader__.load({
       }
 
       const bodyNodes = []
+
+      /* ---------- points bar (milestone ③): every player's points ---------- */
+      if (pointsMap !== null && players.length > 0) {
+        const pointChips = []
+        for (let index = 0; index < players.length; index += 1) {
+          const slot = players[index]
+          const node = asString(slot.node, '')
+          const nick = asString(slot.nick, '玩家')
+          const isDealerSeat = node !== '' && node === dealerNode
+          pointChips.push(h('span', {
+            key: 'pt:' + index,
+            className: 'dsh-card-lan-mj-point'
+              + (node !== '' && node === myNode ? ' is-self' : '')
+              + (isDealerSeat ? ' is-dealer' : ''),
+          }, nick + ' ' + fmt(zh.mjPointValue, { n: pointOf(node) })))
+        }
+        bodyNodes.push(h('div', { key: 'points', className: 'dsh-card-lan-mj-points' }, [
+          h('span', { key: 'label', className: 'dsh-card-lan-mj-riverlabel' }, zh.mjPoints),
+          ...pointChips,
+        ]))
+      }
 
       /* ---------- call window: who discarded what + pending player's options ---------- */
       if (phase === 'calling') {
@@ -2487,6 +2575,13 @@ window.__ModuleLoader__.load({
         const tags = [
           h('span', { key: 'count', className: 'dsh-card-lan-tag' }, fmt(zh.mjHandCount, { n: handCount })),
         ]
+        if (pointsMap !== null) {
+          tags.push(h('span', { key: 'points', className: 'dsh-card-lan-tag is-mj-pointtag' },
+            fmt(zh.mjPointValue, { n: pointOf(node) })))
+        }
+        if (riichiOf(node)) {
+          tags.push(h('span', { key: 'riichi', className: 'dsh-card-lan-tag is-mj-riichi' }, zh.mjRiichiDone))
+        }
         if (node !== '' && node === dealerNode) {
           tags.push(h('span', { key: 'dealer', className: 'dsh-card-lan-tag is-mj-dealer' }, zh.mjDealerMark))
         }
@@ -2569,6 +2664,118 @@ window.__ModuleLoader__.load({
           bannerClass = 'dsh-card-lan-banner is-win'
         }
         bodyNodes.push(h('div', { key: 'result', className: bannerClass, role: 'status' }, bannerText))
+
+        // Milestone ③ settlement panel: winner / yaku / fu-han-score / dora / riichi / deltas.
+        const detailChildren = []
+        if (!exhausted) {
+          const winnerType = result === 'tsumo' ? zh.mjTsumoType : zh.mjRonType
+          detailChildren.push(h('div', { key: 'winner', className: 'dsh-card-lan-mj-resultline' },
+            fmt(zh.mjWinnerLine, { name: winnerNick !== '' ? winnerNick : '玩家', type: winnerType })))
+          const yakuRows = []
+          for (let index = 0; index < yakuList.length; index += 1) {
+            const entry = yakuList[index]
+            let name = ''
+            let han = null
+            if (typeof entry === 'string') {
+              name = entry
+            } else {
+              const record = asObject(entry)
+              if (record !== null) {
+                name = asString(record.name, asString(record.label, asString(record.yaku, '')))
+                if (Number.isFinite(record.han)) han = Math.round(record.han)
+                else if (Number.isFinite(record.value)) han = Math.round(record.value)
+              }
+            }
+            if (name === '') continue
+            yakuRows.push(h('div', { key: 'yaku:' + index, className: 'dsh-card-lan-mj-yakuline' },
+              han !== null ? fmt(zh.mjYakuLine, { name, han }) : name))
+          }
+          if (yakuRows.length > 0) {
+            detailChildren.push(h('div', { key: 'yaku', className: 'dsh-card-lan-mj-yaku' }, [
+              h('div', { key: 'title', className: 'dsh-card-lan-label' }, zh.mjYakuTitle),
+              ...yakuRows,
+            ]))
+          }
+          const stats = []
+          if (totalFu >= 0) stats.push(fmt(zh.mjFuLine, { fu: totalFu }))
+          if (totalHan >= 0) stats.push(fmt(zh.mjHanLine, { han: totalHan }))
+          if (totalScore >= 0) stats.push(fmt(zh.mjScoreLine, { n: totalScore }))
+          if (stats.length > 0) {
+            detailChildren.push(h('div', { key: 'stats', className: 'dsh-card-lan-mj-resultline' }, stats.join(' · ')))
+          }
+          const doraRow = []
+          if (doraTiles.length > 0) {
+            doraRow.push(h('span', { key: 'dlabel', className: 'dsh-card-lan-mj-riverlabel' }, zh.mjDorasTitle + '：'))
+            for (let index = 0; index < doraTiles.length; index += 1) {
+              doraRow.push(mahjongTileNode(doraTiles[index], 'rd:' + index, null, null, true))
+            }
+          }
+          if (uraDoras.length > 0) {
+            doraRow.push(h('span', { key: 'ulabel', className: 'dsh-card-lan-mj-riverlabel' }, zh.mjUraTitle + '：'))
+            for (let index = 0; index < uraDoras.length; index += 1) {
+              doraRow.push(mahjongTileNode(uraDoras[index], 'ru:' + index, null, null, true))
+            }
+          }
+          let winnerTiles = winner !== undefined
+            ? asArray(winner.hand).filter((tile) => typeof tile === 'string' && tile !== '')
+            : []
+          if (winnerTiles.length === 0 && winner === me) winnerTiles = myHand
+          const winnerMelds = winner !== undefined ? asArray(meldsFor(winner)) : []
+          const winnerAllTiles = winnerTiles.slice()
+          for (const meld of winnerMelds) {
+            const meldRecord = asObject(meld)
+            if (meldRecord === null) continue
+            for (const tile of asArray(meldRecord.tiles)) {
+              if (typeof tile === 'string') winnerAllTiles.push(tile)
+            }
+          }
+          let akaCount = 0
+          for (const tile of winnerAllTiles) {
+            if (tile.length >= 3 && tile.slice(-1) === 'r') akaCount += 1
+          }
+          doraRow.push(h('span', { key: 'aka', className: 'dsh-card-lan-tag is-mj-aka' },
+            fmt(zh.mjAkaTitle, { n: akaHan >= 0 ? akaHan : akaCount })))
+          if (doraHan >= 0) {
+            doraRow.push(h('span', { key: 'dorahan', className: 'dsh-card-lan-tag is-mj-dora' },
+              fmt(zh.mjDoraHanLine, { n: doraHan })))
+          }
+          if (uraHan >= 0) {
+            doraRow.push(h('span', { key: 'urahan', className: 'dsh-card-lan-tag' },
+              fmt(zh.mjUraHanLine, { n: uraHan })))
+          }
+          detailChildren.push(h('div', { key: 'dora', className: 'dsh-card-lan-mj-resultline' }, doraRow))
+          if (sticksAwarded > 0) {
+            detailChildren.push(h('div', { key: 'sticks', className: 'dsh-card-lan-mj-resultline' },
+              fmt(zh.mjRiichiStickLine, { n: sticksAwarded })))
+          }
+        }
+        if (deltasMap !== null) {
+          const deltaLines = []
+          for (let index = 0; index < players.length; index += 1) {
+            const slot = players[index]
+            const node = asString(slot.node, '')
+            const rawDelta = deltasMap[node]
+            if (!Number.isFinite(rawDelta)) continue
+            const delta = Math.round(rawDelta)
+            deltaLines.push(h('div', {
+              key: 'delta:' + index,
+              className: 'dsh-card-lan-mj-deltaline'
+                + (delta > 0 ? ' is-plus' : (delta < 0 ? ' is-minus' : '')),
+            }, fmt(zh.mjDeltaLine, {
+              name: asString(slot.nick, '玩家'),
+              delta: delta > 0 ? '+' + delta : String(delta),
+            })))
+          }
+          if (deltaLines.length > 0) {
+            detailChildren.push(h('div', { key: 'deltas', className: 'dsh-card-lan-mj-deltas' }, [
+              h('div', { key: 'title', className: 'dsh-card-lan-label' }, zh.mjDeltasTitle),
+              ...deltaLines,
+            ]))
+          }
+        }
+        if (detailChildren.length > 0) {
+          bodyNodes.push(h('div', { key: 'detail', className: 'dsh-card-lan-mj-resultpanel' }, detailChildren))
+        }
 
         const revealLines = []
         for (let index = 0; index < players.length; index += 1) {
@@ -2662,13 +2869,26 @@ window.__ModuleLoader__.load({
         }, zh.mjPass))
       }
       if (myTurn) {
-        actionNodes.push(h('button', {
-          key: 'discard',
-          type: 'button',
-          className: 'dsh-card-lan-button dsh-card-lan-button-primary',
-          disabled: busy || selectedTile === '',
-          onClick: () => void props.discardSelected(),
-        }, zh.mjDiscard))
+        if (canRiichi) {
+          actionNodes.push(h('button', {
+            key: 'riichi',
+            type: 'button',
+            className: 'dsh-card-lan-button dsh-card-lan-button-primary',
+            disabled: busy || connectionBroken,
+            onClick: () => void props.riichiCall(),
+          }, zh.mjRiichi))
+        }
+        // After riichi the engine forces discarding the drawn tile; when the view
+        // marks `autoDiscard` the server handles it and no discard button is shown.
+        if (!(myRiichi && autoDiscard)) {
+          actionNodes.push(h('button', {
+            key: 'discard',
+            type: 'button',
+            className: 'dsh-card-lan-button' + (canRiichi ? '' : ' dsh-card-lan-button-primary'),
+            disabled: busy || selectedTile === '',
+            onClick: () => void props.discardSelected(),
+          }, zh.mjDiscard))
+        }
         // mustDiscard (after a call/kan) only offers discard-type actions.
         if (!mustDiscard) {
           if (isThree && hasNorth) {
@@ -2687,25 +2907,28 @@ window.__ModuleLoader__.load({
             disabled: busy || connectionBroken,
             onClick: () => void props.tsumoWin(),
           }, zh.mjTsumo))
-          for (let index = 0; index < ankanOptions.length; index += 1) {
-            const tile = ankanOptions[index]
-            actionNodes.push(h('button', {
-              key: 'ankan:' + index,
-              type: 'button',
-              className: 'dsh-card-lan-button dsh-card-lan-button-small',
-              disabled: busy || connectionBroken,
-              onClick: () => void props.ankanCall(tile),
-            }, fmt(zh.mjAnkanButton, { tile: readMahjongTile(tile).text })))
-          }
-          for (let index = 0; index < kakanOptions.length; index += 1) {
-            const tile = kakanOptions[index]
-            actionNodes.push(h('button', {
-              key: 'kakan:' + index,
-              type: 'button',
-              className: 'dsh-card-lan-button dsh-card-lan-button-small',
-              disabled: busy || connectionBroken,
-              onClick: () => void props.kakanCall(tile),
-            }, fmt(zh.mjKakanButton, { tile: readMahjongTile(tile).text })))
+          // Riichi forbids kans (M3 simplification).
+          if (!myRiichi) {
+            for (let index = 0; index < ankanOptions.length; index += 1) {
+              const tile = ankanOptions[index]
+              actionNodes.push(h('button', {
+                key: 'ankan:' + index,
+                type: 'button',
+                className: 'dsh-card-lan-button dsh-card-lan-button-small',
+                disabled: busy || connectionBroken,
+                onClick: () => void props.ankanCall(tile),
+              }, fmt(zh.mjAnkanButton, { tile: readMahjongTile(tile).text })))
+            }
+            for (let index = 0; index < kakanOptions.length; index += 1) {
+              const tile = kakanOptions[index]
+              actionNodes.push(h('button', {
+                key: 'kakan:' + index,
+                type: 'button',
+                className: 'dsh-card-lan-button dsh-card-lan-button-small',
+                disabled: busy || connectionBroken,
+                onClick: () => void props.kakanCall(tile),
+              }, fmt(zh.mjKakanButton, { tile: readMahjongTile(tile).text })))
+            }
           }
         }
       }
@@ -4013,6 +4236,9 @@ window.__ModuleLoader__.load({
       /** Texas Hold'em writes (PROTOCOL §7.16): check also exists. */
       const checkBet = () => act({ type: 'check' })
 
+      /** Mahjong milestone ③: declare riichi (PROTOCOL §7.22). */
+      const riichiCall = () => void act({ type: 'riichi' })
+
       /** Guandan tribute-return write (PROTOCOL §7.12, v10). */
       const submitTribute = (card) => {
         const value = asString(card, '')
@@ -4380,6 +4606,34 @@ window.__ModuleLoader__.load({
         if (mjMeldsMap !== null) return asArray(mjMeldsMap[asString(slot.node, '')])
         return []
       }
+      // Milestone ③: points / riichi / yaku settlement (PROTOCOL §7.22).
+      // The host may flatten these onto the table view or keep them under
+      // `winInfo`; both shapes are accepted.
+      const mjWinInfo = isMahjong ? asObject(table.winInfo) : null
+      const mjPick = (key, fallback) => {
+        if (!isMahjong) return fallback
+        if (table[key] !== undefined && table[key] !== null) return table[key]
+        if (mjWinInfo !== null && mjWinInfo[key] !== undefined && mjWinInfo[key] !== null) return mjWinInfo[key]
+        return fallback
+      }
+      const mjPoints = isMahjong ? asObject(mjPick('points', null)) : null
+      const mjRiichiMap = isMahjong ? asObject(mjPick('riichi', null)) : null
+      const mjRiichiSticks = isMahjong ? Math.max(0, asNumber(mjPick('riichiSticks', 0), 0)) : 0
+      const mjAutoDiscard = isMahjong && mjPick('autoDiscard', false) === true
+      const mjYaku = isMahjong ? asArray(mjPick('yaku', [])) : []
+      const mjHan = isMahjong ? asNumber(mjPick('han', -1), -1) : -1
+      const mjFu = isMahjong ? asNumber(mjPick('fu', -1), -1) : -1
+      const mjScore = isMahjong ? asNumber(mjPick('score', -1), -1) : -1
+      const mjDeltas = isMahjong ? asObject(mjPick('deltas', null)) : null
+      const mjUraDoras = isMahjong
+        ? asArray(mjPick('uraDoras', [])).filter((tile) => typeof tile === 'string' && tile !== '')
+        : []
+      const mjSticksAwarded = isMahjong
+        ? Math.max(0, asNumber(mjPick('riichiSticksAwarded', mjRiichiSticks), mjRiichiSticks))
+        : 0
+      const mjDoraHan = isMahjong ? asNumber(mjPick('doraHan', -1), -1) : -1
+      const mjAkaHan = isMahjong ? asNumber(mjPick('akaHan', -1), -1) : -1
+      const mjUraHan = isMahjong ? asNumber(mjPick('uraHan', -1), -1) : -1
       const mahjongGame = isMahjong
         ? buildMahjongContent({
           game,
@@ -4404,6 +4658,21 @@ window.__ModuleLoader__.load({
           myFuriten: mjMyFuriten,
           mustDiscard: mjMustDiscard,
           meldsFor: mahjongMeldsFor,
+          points: mjPoints,
+          riichiMap: mjRiichiMap,
+          riichiSticks: mjRiichiSticks,
+          autoDiscard: mjAutoDiscard,
+          yaku: mjYaku,
+          han: mjHan,
+          fu: mjFu,
+          score: mjScore,
+          deltas: mjDeltas,
+          uraDoras: mjUraDoras,
+          sticksAwarded: mjSticksAwarded,
+          doraHan: mjDoraHan,
+          akaHan: mjAkaHan,
+          uraHan: mjUraHan,
+          riichiCall,
           result: asString(table.result, ''),
           winnerNode: asString(table.winnerNode, asString(table.winner, '')),
           discardsFor: mahjongDiscardsFor,
@@ -5003,6 +5272,27 @@ window.__ModuleLoader__.load({
       '.dsh-card-lan-mj-meldlabel{font-size:10px;color:var(--dsw-alias-label-secondary,#94a3b8);margin-right:2px}',
       '.dsh-card-lan-tag.is-mj-furiten{background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.45);',
       'color:#f87171;font-weight:600}',
+      '.dsh-card-lan-mj-points{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 10px;border-radius:8px;',
+      'background:rgba(148,163,184,.06);border:1px solid rgba(148,163,184,.18)}',
+      '.dsh-card-lan-mj-point{display:inline-flex;align-items:center;padding:0 7px;border-radius:999px;font-size:11px;',
+      'line-height:1.8;background:rgba(148,163,184,.12);color:#cbd5e1;font-variant-numeric:tabular-nums}',
+      '.dsh-card-lan-mj-point.is-self{background:rgba(77,107,254,.18);color:#c7d2fe}',
+      '.dsh-card-lan-mj-point.is-dealer{border:1px solid rgba(239,68,68,.4)}',
+      '.dsh-card-lan-tag.is-mj-pointtag{background:rgba(148,163,184,.12);color:#cbd5e1}',
+      '.dsh-card-lan-tag.is-mj-riichi{background:rgba(250,204,21,.16);border-color:rgba(250,204,21,.4);',
+      'color:#facc15;font-weight:600}',
+      '.dsh-card-lan-tag.is-mj-stick{background:rgba(250,204,21,.14);color:#facc15}',
+      '.dsh-card-lan-tag.is-mj-aka{background:rgba(239,68,68,.14);color:#f87171}',
+      '.dsh-card-lan-mj-resultpanel{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border-radius:10px;',
+      'background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.28)}',
+      '.dsh-card-lan-mj-resultline{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;color:#cbd5e1}',
+      '.dsh-card-lan-mj-yaku{display:flex;flex-direction:column;gap:2px}',
+      '.dsh-card-lan-mj-yakuline{font-size:11px;line-height:1.5;color:#cbd5e1}',
+      '.dsh-card-lan-mj-deltas{display:flex;flex-direction:column;gap:2px;padding-top:4px;',
+      'border-top:1px dashed rgba(148,163,184,.25)}',
+      '.dsh-card-lan-mj-deltaline{font-size:11px;line-height:1.5;color:#cbd5e1;font-variant-numeric:tabular-nums}',
+      '.dsh-card-lan-mj-deltaline.is-plus{color:#4ade80}',
+      '.dsh-card-lan-mj-deltaline.is-minus{color:#f87171}',
       '.dsh-card-lan-row-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
       '.dsh-card-lan-name{font-weight:600;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dsh-card-lan-hand{display:flex;align-items:center;gap:5px;flex-wrap:wrap;min-height:40px}',

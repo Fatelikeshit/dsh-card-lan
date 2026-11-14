@@ -3,7 +3,9 @@ import assert from 'node:assert/strict'
 import {
   applyAction,
   buildWall,
+  computeWin,
   createTable,
+  doraTile,
   isKokushi,
   isSevenPairs,
   isWinningHand,
@@ -36,6 +38,16 @@ function table(mode) {
   return createTable(mode === 'mahjong3' ? THREE : FOUR, { mode })
 }
 
+function fillJunk() {
+  return ['1s', '1s', '2s', '2s', '3s', '3s', '4s', '4s', '5s', '5s', '6s', '6s', '7s']
+}
+
+function setup4(seed = 31) {
+  const state = table('mahjong4')
+  startRound(state, seeded(seed))
+  return state
+}
+
 test('mahjong walls match 4-player and 3-player modes', () => {
   const wall4 = buildWall('mahjong4')
   const wall3 = buildWall('mahjong3')
@@ -54,8 +66,7 @@ test('deal gives the dealer 14 tiles and the others 13', () => {
   assert.equal(startRound(state, seeded(11)).ok, true)
   assert.equal(state.phase, 'playing')
   assert.equal(state.dealer, 'node-a')
-  const counts = state.players.map((player) => player.hand.length)
-  assert.deepEqual(counts, [14, 13, 13, 13])
+  assert.deepEqual(state.players.map((player) => player.hand.length), [14, 13, 13, 13])
   assert.equal(state.wall, 69)
   assert.ok(typeof state.doraIndicator === 'string' && state.doraIndicator.length >= 2)
 
@@ -136,21 +147,6 @@ test('hands stay private in the snapshot', () => {
   assert.equal(watcher.myHand.length, 0)
   assert.equal(watcher.players.every((player) => player.hand === undefined), true)
 })
-
-function fillJunk() {
-  return ['1s', '1s', '2s', '2s', '3s', '3s', '4s', '4s', '5s', '5s', '6s', '6s', '7s']
-}
-
-function setup4(seed = 31) {
-  const state = createTable([
-    { node: 'node-a', nick: '甲' },
-    { node: 'node-b', nick: '乙' },
-    { node: 'node-c', nick: '丙' },
-    { node: 'node-d', nick: '丁' },
-  ], { mode: 'mahjong4' })
-  startRound(state, seeded(seed))
-  return state
-}
 
 test('a discard can be claimed with chi by the next player', () => {
   const state = setup4(31)
@@ -238,4 +234,75 @@ test('ankan and kakan draw from the dead wall and reveal an extra dora', () => {
   assert.equal(applyAction(added, 'node-a', { type: 'kakan', tile: '2m' }).ok, true)
   assert.equal(added.players[0].melds.some((meld) => meld.type === 'kakan'), true)
   assert.equal(added.doras.length, before + 1)
+})
+
+function tsumoWin(hand, options = {}) {
+  const state = table('mahjong4')
+  startRound(state, seeded(options.seed ?? 51))
+  const player = state.players[0]
+  player.hand = hand.slice()
+  player.drawnTile = options.drawnTile ?? hand[0]
+  player.melds = options.melds ?? []
+  player.riichi = options.riichi === true
+  state.turn = player.node
+  state.mustDiscard = false
+  state.doras = []
+  state.doraIndicator = 'E'
+  const result = applyAction(state, player.node, { type: 'tsumo' })
+  return { state, player, result }
+}
+
+test('pinfu tsumo scores with the standard fu and payments', () => {
+  const { state, result } = tsumoWin(['1m', '2m', '3m', '4p', '5p', '6p', '7s', '8s', '9s', '1p', '2p', '3p', '2s', '2s'])
+  assert.equal(result.ok, true)
+  assert.equal(state.phase, 'result')
+  const info = state.winInfo
+  const names = info.yaku.map((entry) => entry.name)
+  assert.ok(names.includes('平和'), JSON.stringify(names))
+  assert.ok(names.includes('门前清自摸'), JSON.stringify(names))
+  assert.equal(info.fu, 20)
+  assert.ok(info.han >= 2)
+  assert.ok(info.score > 0)
+  const sum = Object.values(info.deltas).reduce((total, value) => total + value, 0)
+  assert.equal(sum, 0)
+  assert.equal(state.players.reduce((total, player) => total + player.points, 0), 100000)
+})
+
+test('an open hand without yaku is rejected as no-yaku', () => {
+  const { result } = tsumoWin(
+    ['4p', '5p', '6p', '7s', '8s', '9s', '1p', '2p', '3p', '2s', '2s'],
+    { melds: [{ type: 'chi', tiles: ['1m', '2m', '3m'], from: 'node-b' }], drawnTile: '3p' },
+  )
+  assert.equal(result.ok, false)
+  assert.equal(result.error, 'no-yaku')
+})
+
+test('seven pairs and kokushi are scored as expected', () => {
+  const chiitoi = tsumoWin(['1m', '1m', '2p', '2p', '3s', '3s', '4m', '4m', '5p', '5p', '6s', '6s', 'E', 'E'])
+  assert.equal(chiitoi.result.ok, true)
+  const chiitoiNames = chiitoi.state.winInfo.yaku.map((entry) => entry.name)
+  assert.ok(chiitoiNames.includes('七对子'), JSON.stringify(chiitoiNames))
+  assert.equal(chiitoi.state.winInfo.fu, 25)
+
+  const kokushi = tsumoWin(['1m', '9m', '1p', '9p', '1s', '9s', 'E', 'S', 'W', 'N', 'P', 'F', 'C', 'C'])
+  assert.equal(kokushi.result.ok, true)
+  assert.ok(kokushi.state.winInfo.yaku.some((entry) => entry.han >= 13), JSON.stringify(kokushi.state.winInfo.yaku))
+})
+
+test('riichi adds han to a winning hand', () => {
+  const { state, result } = tsumoWin(
+    ['1m', '2m', '3m', '4p', '5p', '6p', '7s', '8s', '9s', '1p', '2p', '3p', '2s', '2s'],
+    { riichi: true },
+  )
+  assert.equal(result.ok, true)
+  const names = state.winInfo.yaku.map((entry) => entry.name)
+  assert.ok(names.includes('立直'), JSON.stringify(names))
+  assert.ok(state.winInfo.han >= 3)
+})
+
+test('dora indicators map to the next tile', () => {
+  assert.equal(doraTile('9m'), '1m')
+  assert.equal(doraTile('E'), 'S')
+  assert.equal(doraTile('C'), 'E')
+  assert.equal(doraTile('5p'), '6p')
 })
