@@ -325,9 +325,9 @@ window.__ModuleLoader__.load({
 
 ### 7.1 配置与开桌
 
-- `config.game`：`"blackjack" | "doudizhu" | "paodekuai" | "guandan" | "zhajinhua" | "texas"`，默认 `"blackjack"`，表示下次「创建牌桌」的玩法（持久化）。
+- `config.game`：`"blackjack" | "doudizhu" | "paodekuai" | "guandan" | "zhajinhua" | "texas" | "mahjong4" | "mahjong3"`，默认 `"blackjack"`，表示下次「创建牌桌」的玩法（持久化）。
 - `view.config.game` 暴露。
-- `action { "type":"open", "game"?: "blackjack"|"doudizhu"|"paodekuai"|"guandan"|"zhajinhua"|"texas" }`：带 `game` 时先写回 `config.game` 再开桌；非法 → `{ok:false,error:"invalid-game"}`。不带则用 `config.game`。
+- `action { "type":"open", "game"?: ... }`：带 `game` 时先写回 `config.game` 再开桌；非法 → `{ok:false,error:"invalid-game"}`。不带则用 `config.game`。
 - `hello.table` 增加 `game` 字段，发现列表按玩法显示（21 点 / 斗地主）。
 - `view.table.game` 必填（两种玩法都带）；21 点的 table 结构不变。
 
@@ -574,6 +574,29 @@ window.__ModuleLoader__.load({
 - 我的区域：2 张底牌（自己始终可见）、筹码/本局投入、动作按钮 `弃牌`/`过牌`/`跟注 {N}`/`加注到 {N}`（筹码不足时 `全下 {N}`）；
 - 结算：「你赢了 +{N}」/「你输了」，展示公共牌与赢家手牌；房主「开始下一局」；
 - 观战：看不到任何人底牌（result 时才公开），无操作按钮。
+
+### 7.18 日麻（v11.0，里程碑①：牌墙/配牌/摸打/和了框架）
+
+玩法 id：`mahjong4`（4 人）/ `mahjong3`（3 人），大厅显示「日麻·四人」「日麻·三人」；无机器人。
+
+- **牌组**：4 人 136 张（1–9m/p/s 各 4 + 东南西北白发中各 4）；3 人 108 张（去掉 2m–8m，保留 1m/9m；东南西三家）。
+- **赤宝**：4 人红 5m/5p/5s 各 1；3 人红 5p/5s 各 1（替换对应普通 5）。牌编码：`1m`…`9s`、`E/S/W/N/P/F/C`（东南西北白发中）、红 5 为 `5mr/5pr/5sr`。
+- **配牌**：庄家 14 张、其余 13；首局庄家座位 0，之后按座位轮转（连庄逻辑留给里程碑④）。
+- **宝牌指示**：王牌翻 1 张，M1 只展示；**拔北（3 人）**：自己回合内若手牌有 `N`，可动作 `{type:'nuki', tile:'N'}`：移出该北、拔北计数 +1（每张算 1 宝牌）、从王牌补摸 1 张，仍由本人行动（可连续拔）；4 人无拔北。
+- **行动**：`{type:'discard', tile}` 打出一张；`{type:'tsumo'}` 自摸和了（M1 只判基本和了型：4 面子+雀头 / 七对子 / 国士无双；**暂不计役/符/点数**，结算显示「和了（里程碑①）」）；`{type:'nuki'}`（仅 3 人）。
+- **流局**：活牌墙摸完且无人和了 → `phase='result'`、`result='exhausted'`。
+- **阶段**：`idle|playing|result`；`turn`=当前行动者；`dealer`；`wall`（剩余活牌数）；`doraIndicator`；`nuki`；`discards`（按玩家数组）；手牌隐私：`myHand` 只给自己，观战/他人 `[]`，`result` 公开全部手牌。
+- 错误码：`not-your-turn`、`bad-phase`、`bad-action`、`bad-tile`、`not-winning`。
+- **后续里程碑**：② 吃/碰/杠+副露；③ 全役种+符点+立直/宝牌/里宝；④ 流局罚符/连庄/场风/3 人差异/机器人。
+
+### 7.19 日麻 UI（v11.0）
+
+- 大厅玩法选择增加「日麻·四人」「日麻·三人」；发现列表显示标签；
+- **专用日麻大窗**（overlay 内加宽模式，约 720–760px）：顶部场风/局数（东风 N 局）、宝牌指示牌、剩余牌数、拔北数（3 人）、回合倒计时；
+- 其他家：昵称、门前/手牌数、牌河（按顺序横排）、当前回合高亮；
+- 我的区域：13/14 张手牌文字牌（可点选），按钮 `打出`（未选牌禁用）/`拔北`（仅 3 人且手牌有北）/`自摸和了`（仅当服务端判定可和？M1 由客户端展示、服务端校验）；
+- 结算：「和了（里程碑①）」/「流局」，公开所有人手牌；房主「开始下一局」；
+- 观战：看不到任何人手牌（result 公开），无操作按钮。
 
 ## 8. 验收补充（v4）
 

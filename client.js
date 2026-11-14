@@ -89,8 +89,12 @@ window.__ModuleLoader__.load({
       guandan: '掼蛋',
       zhajinhua: '炸金花',
       texas: '德州扑克',
+      mahjong4: '日麻·四人',
+      mahjong3: '日麻·三人',
     }
-    const GAME_ORDER = ['blackjack', 'doudizhu', 'paodekuai', 'guandan', 'zhajinhua', 'texas']
+    const GAME_ORDER = [
+      'blackjack', 'doudizhu', 'paodekuai', 'guandan', 'zhajinhua', 'texas', 'mahjong4', 'mahjong3',
+    ]
     const DEFAULT_GAME = 'blackjack'
 
     /** Dou Dizhu phases (PROTOCOL §7.3): idle is the pre-deal table state. */
@@ -126,6 +130,12 @@ window.__ModuleLoader__.load({
     const TX_SMALL_BLIND = 10
     const TX_BIG_BLIND = 20
     const TX_RAISE_STEP = 20
+
+    /** Japanese Mahjong (PROTOCOL §7.18): 4-player and 3-player variants. */
+    const MJ_PHASES = { idle: '等待开始', playing: '对局中', result: '本局结束' }
+    const MJ_WIDTH = 740
+    const MJ_SUIT_TEXT = { m: '萬', p: '筒', s: '索' }
+    const MJ_HONOR_TEXT = { E: '東', S: '南', W: '西', N: '北', P: '白', F: '發', C: '中' }
 
     /** Dou Dizhu rank order: 3 < 4 < … < 2 < 小王 < 大王. */
     const DDZ_RANK_ORDER = {
@@ -177,6 +187,8 @@ window.__ModuleLoader__.load({
       'compare-unavailable': '现在不能比牌：场上还有不止 2 个人没弃牌。',
       'raise-cap': '本局加注次数已用完（最多 5 次）。',
       'bad-raise': '加注额不合法：不满足最低加注或筹码不足。',
+      'bad-tile': '这张牌不在你的手牌里，换一张再试。',
+      'not-winning': '现在的牌型不能和了。',
       'must-play': '轮到你领出，必须出牌，不能不要。',
       'bad-phase': '现在不是这个阶段，做不了这个操作。',
       'invalid-game': '不认识的玩法，只支持 21 点和斗地主。',
@@ -496,6 +508,37 @@ window.__ModuleLoader__.load({
       txYourTurn: '轮到你行动',
       txEmptySlot: '空位',
       noPlayersTexas: '人数不足：德州扑克需要 2 人',
+      noPlayersMahjong4: '人数不足：日麻·四人需要 4 人',
+      noPlayersMahjong3: '人数不足：日麻·三人需要 3 人',
+      mj4Title: '日麻·四人 · 第 {n} 局',
+      mj4TitleIdle: '日麻·四人 · 未开局',
+      mj4Capsule: '日麻·四人 · 第 {n} 局',
+      mj4CapsuleIdle: '日麻·四人 · 未开局',
+      mj3Title: '日麻·三人 · 第 {n} 局',
+      mj3TitleIdle: '日麻·三人 · 未开局',
+      mj3Capsule: '日麻·三人 · 第 {n} 局',
+      mj3CapsuleIdle: '日麻·三人 · 未开局',
+      mjRound: '東風 {n} 局',
+      mjDealerMark: '莊',
+      mjDora: '宝牌',
+      mjWall: '剩 {n} 张',
+      mjNuki: '拔北 {n}',
+      mjHandCount: '手牌 {n} 张',
+      mjRiver: '牌河',
+      mjEmptyRiver: '牌河为空',
+      mjMyHand: '我的手牌（{n} 张）',
+      mjDiscard: '打出',
+      mjNukiBtn: '拔北',
+      mjTsumo: '自摸和了',
+      mjWin: '和了（里程碑①）',
+      mjExhausted: '流局',
+      mjRoundOver: '本局结束',
+      mjWinner: '和了者：{name}',
+      mjReveal: '所有人手牌',
+      mjHintYourTurn: '轮到你摸打',
+      mjHintWait: '等待 {name} 出手…',
+      mjSelectHint: '请选择要打出的牌',
+      mjSelected: '已选 {n} 张',
     }
 
     /** Tiny `{name}` interpolator for the copy above. */
@@ -673,6 +716,7 @@ window.__ModuleLoader__.load({
     function gameOf(value) {
       return value === 'doudizhu' || value === 'paodekuai' || value === 'guandan'
         || value === 'zhajinhua' || value === 'texas'
+        || value === 'mahjong4' || value === 'mahjong3'
         ? value
         : DEFAULT_GAME
     }
@@ -687,6 +731,37 @@ window.__ModuleLoader__.load({
       return game === 'doudizhu' || game === 'paodekuai' || game === 'guandan'
     }
 
+    /** True for the two Japanese Mahjong game ids (PROTOCOL §7.18). */
+    function isMahjongId(game) {
+      return game === 'mahjong4' || game === 'mahjong3'
+    }
+
+    /** True when the id is a 3-player Mahjong table (three-player rules). */
+    function isMahjongThree(game) {
+      return game === 'mahjong3'
+    }
+
+    /**
+     * Decode one Mahjong tile (`1m`..`9s`, honors `E/S/W/N/P/F/C`, red `5m r`).
+     * Returns the text glyphs plus a tone ('red' for 中/赤5, 'green' for 發).
+     */
+    function readMahjongTile(tile) {
+      const raw = typeof tile === 'string' ? tile.trim() : ''
+      if (raw === '') return { text: '?', tone: '' }
+      const honor = MJ_HONOR_TEXT[raw]
+      if (honor !== undefined) {
+        const tone = raw === 'C' ? 'red' : (raw === 'F' ? 'green' : '')
+        return { text: honor, tone }
+      }
+      const isRed = raw.length >= 3 && raw.slice(-1) === 'r'
+      const base = isRed ? raw.slice(0, -1) : raw
+      const suit = base.slice(-1)
+      const rank = base.slice(0, -1)
+      const suitText = MJ_SUIT_TEXT[suit]
+      if (suitText === undefined || !/^[1-9]$/.test(rank)) return { text: raw, tone: '' }
+      return { text: (isRed ? '赤' : '') + rank + suitText, tone: isRed ? 'red' : '' }
+    }
+
     /** Phase label for the active game. */
     function phaseLabelFor(game, phase) {
       const labels = game === 'doudizhu'
@@ -695,7 +770,9 @@ window.__ModuleLoader__.load({
           ? PDK_PHASES
           : (game === 'guandan'
             ? GD_PHASES
-            : (game === 'zhajinhua' ? ZJH_PHASES : (game === 'texas' ? TX_PHASES : PHASES))))
+            : (game === 'zhajinhua'
+              ? ZJH_PHASES
+              : (game === 'texas' ? TX_PHASES : (isMahjongId(game) ? MJ_PHASES : PHASES)))))
       return labels[phase] !== undefined ? labels[phase] : phase
     }
 
@@ -706,6 +783,8 @@ window.__ModuleLoader__.load({
       if (game === 'guandan') return round > 0 ? fmt(zh.gdTitle, { n: round }) : zh.gdTitleIdle
       if (game === 'zhajinhua') return round > 0 ? fmt(zh.zjhTitle, { n: round }) : zh.zjhTitleIdle
       if (game === 'texas') return round > 0 ? fmt(zh.txTitle, { n: round }) : zh.txTitleIdle
+      if (game === 'mahjong4') return round > 0 ? fmt(zh.mj4Title, { n: round }) : zh.mj4TitleIdle
+      if (game === 'mahjong3') return round > 0 ? fmt(zh.mj3Title, { n: round }) : zh.mj3TitleIdle
       return round > 0 ? fmt(zh.tableTitle, { n: round }) : zh.tableTitleIdle
     }
 
@@ -716,6 +795,8 @@ window.__ModuleLoader__.load({
       if (game === 'guandan') return round > 0 ? fmt(zh.gdCapsule, { n: round }) : zh.gdCapsuleIdle
       if (game === 'zhajinhua') return round > 0 ? fmt(zh.zjhCapsule, { n: round }) : zh.zjhCapsuleIdle
       if (game === 'texas') return round > 0 ? fmt(zh.txCapsule, { n: round }) : zh.txCapsuleIdle
+      if (game === 'mahjong4') return round > 0 ? fmt(zh.mj4Capsule, { n: round }) : zh.mj4CapsuleIdle
+      if (game === 'mahjong3') return round > 0 ? fmt(zh.mj3Capsule, { n: round }) : zh.mj3CapsuleIdle
       return round > 0 ? fmt(zh.capsule, { n: round }) : zh.capsuleIdle
     }
 
@@ -861,6 +942,8 @@ window.__ModuleLoader__.load({
         if (game === 'guandan') return zh.noPlayersGuandan
         if (game === 'zhajinhua') return zh.noPlayersZjh
         if (game === 'texas') return zh.noPlayersTexas
+        if (game === 'mahjong4') return zh.noPlayersMahjong4
+        if (game === 'mahjong3') return zh.noPlayersMahjong3
         if (isCardGameId(game)) return zh.noPlayersCard
       }
       return ERROR_TEXT[trimmed] !== undefined ? ERROR_TEXT[trimmed] : fmt(zh.actionFailedWith, { reason: trimmed })
@@ -2166,6 +2249,257 @@ window.__ModuleLoader__.load({
       return { headExtras, hint, bodyNodes, actionNodes }
     }
 
+    /** One Mahjong text tile; `small` is the river size, `onClick` selects. */
+    function mahjongTileNode(tile, key, selected, onClick, small) {
+      const face = readMahjongTile(tile)
+      const classes = ['dsh-card-lan-mj-tile']
+      if (small === true) classes.push('is-small')
+      if (face.tone !== '') classes.push('is-' + face.tone)
+      if (selected === true) classes.push('is-selected')
+      const props = {
+        key,
+        className: classes.join(' '),
+        title: face.text,
+        'aria-label': face.text,
+      }
+      if (onClick !== null && onClick !== undefined) {
+        props.role = 'button'
+        props.tabIndex = 0
+        props['aria-pressed'] = selected === true
+        props.onClick = () => onClick()
+        props.onKeyDown = (event) => {
+          if (event === null || event === undefined) return
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            onClick()
+          }
+        }
+      }
+      return h('span', props, face.text)
+    }
+
+    /**
+     * Japanese Mahjong table body (PROTOCOL §7.18/§7.19, milestone ①): round /
+     * dealer / dora indicator / wall, other players' rivers, my 13-14 text
+     * tiles and discard / nuki / tsumo actions. Pure renderer.
+     */
+    function buildMahjongContent(props) {
+      const game = isMahjongId(props.game) ? props.game : 'mahjong4'
+      const isThree = isMahjongThree(game)
+      const role = props.role
+      const isSpectator = props.isSpectator === true
+      const phase = props.phase
+      const players = props.players
+      const me = props.me
+      const myNode = asString(props.myNode, '')
+      const turnNode = asString(props.turnNode, '')
+      const turnNick = asString(props.turnNick, '')
+      const myHand = asArray(props.myHand).filter((tile) => typeof tile === 'string' && tile !== '')
+      const round = Math.max(0, asNumber(props.round, 0))
+      const dealerNode = asString(props.dealerNode, '')
+      const wall = Math.max(0, asNumber(props.wall, 0))
+      const nuki = Math.max(0, asNumber(props.nuki, 0))
+      const doraIndicator = asString(props.doraIndicator, '')
+      const result = asString(props.result, '')
+      const winnerNode = asString(props.winnerNode, '')
+      const discardsFor = typeof props.discardsFor === 'function' ? props.discardsFor : () => []
+      const busy = props.busy === true
+      const connectionBroken = props.connectionBroken === true
+      const turnRemainingMs = asNumber(props.turnRemainingMs, -1)
+      const selectedIndexes = asArray(props.selectedIndexes)
+      const myTurn = !isSpectator && phase === 'playing' && myNode !== '' && turnNode === myNode
+      const hasNorth = myHand.indexOf('N') !== -1
+      const canSelect = myTurn && !busy && !connectionBroken
+      const selectedTile = selectedIndexes.length === 1 && myHand[selectedIndexes[0]] !== undefined
+        ? myHand[selectedIndexes[0]]
+        : ''
+
+      /* ---------- header extras: round, dealer, dora, wall, nuki, timer ---------- */
+      const headExtras = [
+        h('span', { key: 'game', className: 'dsh-card-lan-pill is-game-' + game }, GAME_LABELS[game]),
+        h('span', { key: 'round', className: 'dsh-card-lan-tag is-mj-round' },
+          fmt(zh.mjRound, { n: Math.max(1, round) })),
+        h('span', { key: 'dora', className: 'dsh-card-lan-tag is-mj-dora' }, [
+          h('span', { key: 'label' }, zh.mjDora + '：'),
+          doraIndicator !== '' ? mahjongTileNode(doraIndicator, 'indicator', null, null, true)
+            : h('span', { key: 'none' }, '—'),
+        ]),
+        h('span', { key: 'wall', className: 'dsh-card-lan-tag' }, fmt(zh.mjWall, { n: wall })),
+      ]
+      if (isThree) {
+        headExtras.push(h('span', { key: 'nuki', className: 'dsh-card-lan-tag' }, fmt(zh.mjNuki, { n: nuki })))
+      }
+      if (dealerNode !== '') {
+        headExtras.push(h('span', { key: 'dealer', className: 'dsh-card-lan-tag is-mj-dealer' }, zh.mjDealerMark))
+      }
+      if (phase === 'playing' && turnRemainingMs >= 0) {
+        headExtras.push(h('span', { key: 'countdown', className: 'dsh-card-lan-tag is-turn' },
+          fmt(zh.ddzCountdown, { n: Math.max(0, Math.ceil(turnRemainingMs / 1000)) })))
+      }
+
+      /* ---------- hint line ---------- */
+      let hint = ''
+      if (isSpectator) {
+        hint = zh.spectatorHint
+      } else if (phase === 'idle') {
+        hint = role === 'host' ? zh.ddzIdleHost : zh.ddzWaitStart
+      } else if (phase === 'result') {
+        hint = role === 'host' ? zh.ddzResultHost : zh.ddzWaitNext
+      } else if (myTurn) {
+        hint = zh.mjHintYourTurn
+      } else {
+        hint = turnNick !== '' ? fmt(zh.mjHintWait, { name: turnNick }) : zh.ddzWaitHostState
+      }
+
+      const bodyNodes = []
+
+      /* ---------- other seats: nickname, hand count, river, turn ---------- */
+      const others = players.filter((slot) => slot !== me)
+      for (let index = 0; index < others.length; index += 1) {
+        const slot = others[index]
+        const node = asString(slot.node, '')
+        const nick = asString(slot.nick, '玩家')
+        const seatIndex = players.indexOf(slot)
+        const rawCount = Number.isInteger(slot.handCount)
+          ? slot.handCount
+          : (Number.isInteger(slot.count) ? slot.count : asArray(slot.hand).length)
+        const handCount = Math.max(0, rawCount)
+        const isTurn = phase === 'playing' && node !== '' && node === turnNode
+        const winning = phase === 'result' && winnerNode !== '' && node === winnerNode
+        const classes = ['dsh-card-lan-row', 'dsh-card-lan-mj-seat']
+        if (isTurn) classes.push('is-turn')
+        if (winning) classes.push('is-winner')
+        const tags = [
+          h('span', { key: 'count', className: 'dsh-card-lan-tag' }, fmt(zh.mjHandCount, { n: handCount })),
+        ]
+        if (node !== '' && node === dealerNode) {
+          tags.push(h('span', { key: 'dealer', className: 'dsh-card-lan-tag is-mj-dealer' }, zh.mjDealerMark))
+        }
+        if (winning) {
+          tags.push(h('span', { key: 'win', className: 'dsh-card-lan-tag is-result-win' }, zh.mjWin))
+        }
+        const river = asArray(discardsFor(slot, seatIndex)).filter((tile) => typeof tile === 'string' && tile !== '')
+        const riverNodes = river.length > 0
+          ? river.map((tile, riverIndex) => mahjongTileNode(tile, 'r:' + riverIndex, null, null, true))
+          : [h('span', { key: 'empty', className: 'dsh-card-lan-empty' }, zh.mjEmptyRiver)]
+        bodyNodes.push(h('div', { key: 'seat:' + node + ':' + index, className: classes.join(' ') }, [
+          h('div', { key: 'headline', className: 'dsh-card-lan-row-head' }, [
+            h('span', { key: 'nick', className: 'dsh-card-lan-name' }, nick),
+            ...tags,
+          ]),
+          h('div', { key: 'river', className: 'dsh-card-lan-mj-river' }, [
+            h('span', { key: 'label', className: 'dsh-card-lan-mj-riverlabel' }, zh.mjRiver),
+            ...riverNodes,
+          ]),
+        ]))
+      }
+
+      /* ---------- my hand: 13/14 text tiles, single-select ---------- */
+      if (!isSpectator) {
+        const handHead = [
+          h('span', { key: 'label', className: 'dsh-card-lan-label' }, fmt(zh.mjMyHand, { n: myHand.length })),
+          selectedIndexes.length > 0
+            ? h('span', { key: 'sel', className: 'dsh-card-lan-tag is-turn' },
+              fmt(zh.mjSelected, { n: selectedIndexes.length }))
+            : null,
+          myTurn ? h('span', { key: 'turn', className: 'dsh-card-lan-tag is-turn' }, zh.mjHintYourTurn) : null,
+        ]
+        const handNodes = myHand.map((tile, index) => mahjongTileNode(
+          tile,
+          'hand:' + index + ':' + tile,
+          selectedIndexes.indexOf(index) !== -1,
+          canSelect ? () => props.toggleCard(index) : null,
+          false,
+        ))
+        bodyNodes.push(h('div', { key: 'myHand', className: 'dsh-card-lan-mj-hand-area' }, [
+          h('div', { key: 'head', className: 'dsh-card-lan-row-head' }, handHead),
+          handNodes.length > 0
+            ? h('div', { key: 'tiles', className: 'dsh-card-lan-mj-hand' }, handNodes)
+            : h('span', { key: 'empty', className: 'dsh-card-lan-empty' }, zh.mjSelectHint),
+        ]))
+      }
+
+      /* ---------- result: win / draw + reveal all hands ---------- */
+      if (phase === 'result') {
+        const winner = players.find((slot) => asString(slot.node, '') === winnerNode)
+        const winnerNick = winner !== undefined ? asString(winner.nick, '玩家') : ''
+        const exhausted = result === 'exhausted'
+        let bannerText = zh.mjRoundOver
+        let bannerClass = 'dsh-card-lan-banner is-none'
+        if (exhausted) {
+          bannerText = zh.mjExhausted
+        } else if (result === 'tsumo' || result === 'win' || winnerNode !== '') {
+          bannerText = zh.mjWin + (winnerNick !== '' ? ' · ' + fmt(zh.mjWinner, { name: winnerNick }) : '')
+          bannerClass = 'dsh-card-lan-banner is-win'
+        }
+        bodyNodes.push(h('div', { key: 'result', className: bannerClass, role: 'status' }, bannerText))
+
+        const revealLines = []
+        for (let index = 0; index < players.length; index += 1) {
+          const slot = players[index]
+          const node = asString(slot.node, '')
+          const nick = asString(slot.nick, '玩家')
+          let hand = asArray(slot.hand).filter((tile) => typeof tile === 'string' && tile !== '')
+          if (hand.length === 0) hand = asArray(slot.cards).filter((tile) => typeof tile === 'string' && tile !== '')
+          if (hand.length === 0 && slot === me) hand = myHand
+          const won = node !== '' && node === winnerNode
+          const tileNodes = hand.length > 0
+            ? hand.map((tile, tileIndex) => mahjongTileNode(tile, 'x:' + tileIndex, null, null, true))
+            : [h('span', { key: 'empty', className: 'dsh-card-lan-empty' }, '—')]
+          revealLines.push(h('div', {
+            key: 'reveal:' + index + ':' + node,
+            className: 'dsh-card-lan-mj-revealline' + (won ? ' is-winner' : ''),
+          }, [
+            h('span', { key: 'nick', className: 'dsh-card-lan-name' }, nick),
+            ...tileNodes,
+          ]))
+        }
+        bodyNodes.push(h('div', { key: 'reveal', className: 'dsh-card-lan-mj-reveal' }, [
+          h('div', { key: 'title', className: 'dsh-card-lan-label' }, zh.mjReveal),
+          ...revealLines,
+        ]))
+      }
+
+      /* ---------- actions: discard / nuki (3P) / tsumo / start ---------- */
+      const actionNodes = []
+      if (myTurn) {
+        actionNodes.push(h('button', {
+          key: 'discard',
+          type: 'button',
+          className: 'dsh-card-lan-button dsh-card-lan-button-primary',
+          disabled: busy || connectionBroken || selectedTile === '',
+          onClick: () => void props.discardSelected(),
+        }, zh.mjDiscard))
+        if (isThree && hasNorth) {
+          actionNodes.push(h('button', {
+            key: 'nuki',
+            type: 'button',
+            className: 'dsh-card-lan-button',
+            disabled: busy || connectionBroken,
+            onClick: () => void props.nukiTile(),
+          }, zh.mjNukiBtn))
+        }
+        actionNodes.push(h('button', {
+          key: 'tsumo',
+          type: 'button',
+          className: 'dsh-card-lan-button',
+          disabled: busy || connectionBroken,
+          onClick: () => void props.tsumoWin(),
+        }, zh.mjTsumo))
+      }
+      if (role === 'host' && (phase === 'idle' || phase === 'result')) {
+        actionNodes.push(h('button', {
+          key: 'start',
+          type: 'button',
+          className: 'dsh-card-lan-button dsh-card-lan-button-primary',
+          disabled: busy || connectionBroken,
+          onClick: () => void props.startRound(),
+        }, phase === 'result' ? zh.ddzNextRound : zh.ddzStart))
+      }
+
+      return { headExtras, hint, bodyNodes, actionNodes }
+    }
+
     /** One seat in the table overlay: cards, total, status, result, score. */
     function PlayerRow(props) {
       const player = props.player
@@ -3249,6 +3583,8 @@ window.__ModuleLoader__.load({
         asString(tableRecord.turn, ''),
         // Sorted so a host re-ordering the hand does not reset the selection.
         sortDdzCards(asArray(tableRecord.myCards)).join(','),
+        // Mahjong keeps the hand in `myHand` (tiles), so track it too.
+        asArray(tableRecord.myHand).join(','),
       ].join('|')
       useEffect(() => {
         setSelectedIndexes([])
@@ -3260,10 +3596,14 @@ window.__ModuleLoader__.load({
       // Guandan needs room for 27 cards: keep at least a 420px panel even if the
       // user picked the small/medium size (bigger sizes are respected).
       const earlyGame = tableRecord !== null ? gameOf(tableRecord.game) : DEFAULT_GAME
-      const sizeWidth = Math.max(
-        earlyGame === 'guandan' ? GUANDAN_MIN_WIDTH : 0,
-        OVERLAY_WIDTHS[overlaySizeOf(configRecord)],
-      )
+      // Mahjong gets its dedicated wide window (720–760px) regardless of the
+      // user's overlay-size preset; other games keep their normal widths.
+      const sizeWidth = isMahjongId(earlyGame)
+        ? MJ_WIDTH
+        : Math.max(
+          earlyGame === 'guandan' ? GUANDAN_MIN_WIDTH : 0,
+          OVERLAY_WIDTHS[overlaySizeOf(configRecord)],
+        )
       const savedPosition = overlayPositionOf(configRecord)
       const savedX = savedPosition !== null ? savedPosition.x : null
       const savedY = savedPosition !== null ? savedPosition.y : null
@@ -3295,6 +3635,7 @@ window.__ModuleLoader__.load({
       const isGuandan = game === 'guandan'
       const isZjh = game === 'zhajinhua'
       const isTexas = game === 'texas'
+      const isMahjong = isMahjongId(game)
       const isCardGame = isCardGameId(game)
       const phase = asString(table.phase, 'idle')
       const round = Math.max(0, asNumber(table.round, 0))
@@ -3450,10 +3791,28 @@ window.__ModuleLoader__.load({
         void act({ type: 'tribute-return', card: value })
       }
 
+      /** Mahjong writes (PROTOCOL §7.18): discard / nuki / tsumo. */
+      const discardSelected = () => {
+        const hand = asArray(table.myHand)
+        const tile = selectedIndexes.length === 1 && typeof hand[selectedIndexes[0]] === 'string'
+          ? hand[selectedIndexes[0]]
+          : ''
+        if (tile === '') return
+        setSelectedIndexes([])
+        void act({ type: 'discard', tile })
+      }
+      const nukiTile = () => void act({ type: 'nuki', tile: 'N' })
+      const tsumoWin = () => void act({ type: 'tsumo' })
+
       /** Card-game writes (PROTOCOL §7.3/§7.6/§7.12): bid / play / pass / start. */
       const toggleCard = (index) => {
         // Guandan tribute returns exactly one card, so replace the selection.
         if (isGuandan && phase === 'tribute') {
+          setSelectedIndexes([index])
+          return
+        }
+        // Mahjong discards exactly one tile.
+        if (isMahjong) {
           setSelectedIndexes([index])
           return
         }
@@ -3716,6 +4075,51 @@ window.__ModuleLoader__.load({
         })
         : null
 
+      // Mahjong view fields (PROTOCOL §7.18); ignored by other games.
+      const mjMyHand = isMahjong
+        ? asArray(table.myHand).filter((tile) => typeof tile === 'string' && tile !== '')
+        : []
+      const mjDiscardsRaw = isMahjong ? table.discards : null
+      const mahjongDiscardsFor = (slot, index) => {
+        if (Array.isArray(mjDiscardsRaw)) {
+          return asArray(mjDiscardsRaw[index]).filter((tile) => typeof tile === 'string' && tile !== '')
+        }
+        const discardsMap = asObject(mjDiscardsRaw)
+        if (discardsMap === null) return []
+        return asArray(discardsMap[asString(slot.node, '')]).filter((tile) => typeof tile === 'string' && tile !== '')
+      }
+      const mahjongGame = isMahjong
+        ? buildMahjongContent({
+          game,
+          role,
+          isSpectator,
+          phase,
+          players,
+          me,
+          myNode,
+          turnNode,
+          turnNick,
+          myHand: mjMyHand,
+          round: Math.max(0, asNumber(table.round, 0)),
+          dealerNode: asString(table.dealer, ''),
+          wall: Math.max(0, asNumber(table.wall, 0)),
+          nuki: Math.max(0, asNumber(table.nuki, 0)),
+          doraIndicator: asString(table.doraIndicator, ''),
+          result: asString(table.result, ''),
+          winnerNode: asString(table.winnerNode, asString(table.winner, '')),
+          discardsFor: mahjongDiscardsFor,
+          selectedIndexes,
+          toggleCard,
+          discardSelected,
+          nukiTile,
+          tsumoWin,
+          busy,
+          connectionBroken,
+          turnRemainingMs,
+          startRound,
+        })
+        : null
+
       let hint = ''
       if (isCardGame) {
         hint = cardGame.hint
@@ -3723,6 +4127,8 @@ window.__ModuleLoader__.load({
         hint = bettingGame.hint
       } else if (texasGame !== null) {
         hint = texasGame.hint
+      } else if (mahjongGame !== null) {
+        hint = mahjongGame.hint
       } else if (isSpectator) {
         hint = zh.spectatorHint
       } else if (phase === 'playing') {
@@ -3796,7 +4202,9 @@ window.__ModuleLoader__.load({
             ? cardGame.headExtras
             : (bettingGame !== null
               ? bettingGame.headExtras
-              : (texasGame !== null ? texasGame.headExtras : []))),
+              : (texasGame !== null
+                ? texasGame.headExtras
+                : (mahjongGame !== null ? mahjongGame.headExtras : [])))),
           isSpectator
             ? h('span', { key: 'spectator', className: 'dsh-card-lan-pill is-spectator' }, zh.spectatorBadge)
             : null,
@@ -4003,6 +4411,8 @@ window.__ModuleLoader__.load({
         for (const node of bettingGame.bodyNodes) bodyChildren.push(node)
       } else if (texasGame !== null) {
         for (const node of texasGame.bodyNodes) bodyChildren.push(node)
+      } else if (mahjongGame !== null) {
+        for (const node of mahjongGame.bodyNodes) bodyChildren.push(node)
       } else {
         bodyChildren.push(dealerBlock)
         for (const row of rows) bodyChildren.push(row)
@@ -4012,7 +4422,9 @@ window.__ModuleLoader__.load({
         ? cardGame.actionNodes
         : (bettingGame !== null
           ? bettingGame.actionNodes
-          : (texasGame !== null ? texasGame.actionNodes : bjActionNodes))
+          : (texasGame !== null
+            ? texasGame.actionNodes
+            : (mahjongGame !== null ? mahjongGame.actionNodes : bjActionNodes)))
       if (finalActions.length > 0) {
         bodyChildren.push(h('div', { key: 'actions', className: 'dsh-card-lan-actions' }, finalActions))
       }
@@ -4246,6 +4658,34 @@ window.__ModuleLoader__.load({
       '.dsh-card-lan-tag.is-zjh-235{background:rgba(250,204,21,.2);border-color:rgba(250,204,21,.45);',
       'color:#facc15;font-weight:700}',
       '.dsh-card-lan-tag.is-hand-label{background:rgba(148,163,184,.14);color:#cbd5e1}',
+      '.dsh-card-lan-tag.is-game-mahjong4{background:rgba(45,212,191,.16);border-color:rgba(45,212,191,.4);color:#2dd4bf}',
+      '.dsh-card-lan-tag.is-game-mahjong3{background:rgba(45,212,191,.16);border-color:rgba(45,212,191,.4);color:#2dd4bf}',
+      '.dsh-card-lan-pill.is-game-mahjong4{background:rgba(45,212,191,.16);border-color:rgba(45,212,191,.45);color:#2dd4bf}',
+      '.dsh-card-lan-pill.is-game-mahjong3{background:rgba(45,212,191,.16);border-color:rgba(45,212,191,.45);color:#2dd4bf}',
+      '.dsh-card-lan-tag.is-mj-round{background:rgba(250,204,21,.14);color:#facc15}',
+      '.dsh-card-lan-tag.is-mj-dora{background:rgba(251,146,60,.14);color:#fb923c}',
+      '.dsh-card-lan-tag.is-mj-dealer{background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.4);',
+      'color:#f87171;font-weight:700}',
+      '.dsh-card-lan-mj-tile{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;',
+      'min-width:34px;height:46px;padding:0 4px;border-radius:6px;background:#f6f3ea;color:#1b1f27;',
+      'font-size:16px;font-weight:700;line-height:1;border:2px solid transparent;',
+      'box-shadow:0 2px 6px rgba(2,6,23,.35),inset 0 0 0 1px rgba(15,23,42,.10);user-select:none;-webkit-user-select:none;',
+      'transition:transform .12s ease,border-color .12s ease,box-shadow .12s ease}',
+      '.dsh-card-lan-mj-tile.is-small{min-width:22px;height:28px;font-size:11px;padding:0 2px;cursor:default;border-width:1px}',
+      '.dsh-card-lan-mj-tile.is-red{color:#cc2f26}',
+      '.dsh-card-lan-mj-tile.is-green{color:#1f7a44}',
+      '.dsh-card-lan-mj-tile[role="button"]:hover{transform:translateY(-3px)}',
+      '.dsh-card-lan-mj-tile.is-selected{transform:translateY(-6px);border-color:var(--dsw-alias-brand-primary,#4d6bfe);',
+      'box-shadow:0 4px 12px rgba(77,107,254,.35),inset 0 0 0 1px rgba(77,107,254,.4)}',
+      '.dsh-card-lan-mj-hand-area{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border-radius:10px;',
+      'background:var(--dsw-alias-bg-layer-1,rgba(15,23,42,.45));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.2))}',
+      '.dsh-card-lan-mj-hand{display:flex;flex-wrap:wrap;gap:4px;align-items:flex-end;padding:2px 0;min-height:50px}',
+      '.dsh-card-lan-mj-river{display:flex;flex-wrap:wrap;gap:2px;align-items:center;min-height:30px}',
+      '.dsh-card-lan-mj-riverlabel{font-size:10px;color:var(--dsw-alias-label-secondary,#94a3b8);margin-right:2px}',
+      '.dsh-card-lan-mj-reveal{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border-radius:8px;',
+      'background:var(--dsw-alias-bg-layer-1,rgba(15,23,42,.35));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.2))}',
+      '.dsh-card-lan-mj-revealline{display:flex;flex-wrap:wrap;gap:2px;align-items:center;font-size:12px}',
+      '.dsh-card-lan-mj-revealline.is-winner{color:#4ade80}',
       '.dsh-card-lan-row-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
       '.dsh-card-lan-name{font-weight:600;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dsh-card-lan-hand{display:flex;align-items:center;gap:5px;flex-wrap:wrap;min-height:40px}',
