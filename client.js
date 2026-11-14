@@ -57,8 +57,8 @@ window.__ModuleLoader__.load({
     const AUTO_FADE_FACTOR = 0.55
 
     /** Overlay width per size preset (PROTOCOL.md 3.2 config.overlaySize). */
-    const OVERLAY_WIDTHS = { small: 320, medium: 380, large: 460 }
-    const OVERLAY_SIZES = ['small', 'medium', 'large']
+    const OVERLAY_WIDTHS = { small: 320, medium: 380, large: 460, xlarge: 920 }
+    const OVERLAY_SIZES = ['small', 'medium', 'large', 'xlarge']
     const DEFAULT_SIZE = 'medium'
 
     /** Default anchor (bottom-right, above the composer) and drag save delay. */
@@ -259,6 +259,7 @@ window.__ModuleLoader__.load({
       sizeSmall: '小',
       sizeMedium: '中',
       sizeLarge: '大',
+      sizeXLarge: '超大',
       sizeHint: '改大小立即生效。',
       autoFadeLabel: '自动变淡',
       autoFadeHint: '鼠标离开浮层后自动变淡，移回或聚焦时恢复；关闭则一直保持上面的透明度。',
@@ -1018,7 +1019,14 @@ window.__ModuleLoader__.load({
     }
 
     /** Overlay size preset from the (untrusted) config value. */
-    function overlaySizeOf(config) {
+    function overlaySizeLabel(size) {
+  if (size === 'small') return zh.sizeSmall
+  if (size === 'medium') return zh.sizeMedium
+  if (size === 'xlarge') return zh.sizeXLarge
+  return zh.sizeLarge
+}
+
+function overlaySizeOf(config) {
       const record = asObject(config)
       const size = record !== null ? record.overlaySize : undefined
       return typeof size === 'string' && OVERLAY_WIDTHS[size] !== undefined ? size : DEFAULT_SIZE
@@ -3759,7 +3767,7 @@ window.__ModuleLoader__.load({
               onChange: (event) => changeSize(event.target.value),
             }, [
               ...OVERLAY_SIZES.map((size) => h('option', { key: size, value: size },
-                size === 'small' ? zh.sizeSmall : (size === 'medium' ? zh.sizeMedium : zh.sizeLarge))),
+                overlaySizeLabel(size))),
             ]),
             h('span', { key: 'hint', className: 'dsh-card-lan-muted dsh-card-lan-small' }, zh.sizeHint),
           ]),
@@ -4235,7 +4243,7 @@ window.__ModuleLoader__.load({
       // Mahjong gets its dedicated wide window (720–760px) regardless of the
       // user's overlay-size preset; other games keep their normal widths.
       const sizeWidth = isMahjongId(earlyGame)
-        ? MJ_WIDTH
+        ? Math.max(MJ_WIDTH, OVERLAY_WIDTHS[overlaySizeOf(configRecord)])
         : Math.max(
           earlyGame === 'guandan' ? GUANDAN_MIN_WIDTH : 0,
           OVERLAY_WIDTHS[overlaySizeOf(configRecord)],
@@ -5058,10 +5066,10 @@ window.__ModuleLoader__.load({
               value: overlaySizeOf(configRecord),
               'aria-label': zh.sizeLabel,
               onChange: (event) => changeOverlaySize(String(event.target.value)),
-            }, ['small', 'medium', 'large'].map((value) => h('option', {
+            }, OVERLAY_SIZES.map((value) => h('option', {
               key: value,
               value,
-            }, value === 'small' ? zh.sizeSmall : (value === 'medium' ? zh.sizeMedium : zh.sizeLarge)))),
+            }, overlaySizeLabel(value)))),
           ]),
           h('label', { key: 'fade', className: 'dsh-card-lan-check dsh-card-lan-settings-check' }, [
             h('input', {
