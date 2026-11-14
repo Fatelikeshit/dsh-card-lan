@@ -34,6 +34,12 @@ import {
   createTable as txCreateTable,
   startRound as txStartRound,
 } from '../lib/games/texas.js'
+import {
+  applyAction as applyBj,
+  botAction as bjBotAction,
+  newTable as bjNewTable,
+  startRound as bjStartRound,
+} from '../lib/engine.js'
 
 /** Deterministic rng (mulberry32). */
 function seeded(seed) {
@@ -179,4 +185,42 @@ test('texas bots play streets and settle a whole hand', () => {
   }
   assert.equal(state.phase, 'result')
   assert.equal(state.players.reduce((sum, player) => sum + player.chips, 0), 3000)
+})
+
+test('blackjack botAction hits below 17 and stands at 17+', () => {
+  const table = bjNewTable([
+    { node: 'node-a', nick: '甲' },
+    { node: 'node-b', nick: '乙' },
+  ])
+  bjStartRound(table, seeded(3))
+  const node = table.turn
+  const player = table.players.find((entry) => entry.node === node)
+  assert.ok(player)
+  player.cards = ['10S', '5D']
+  assert.equal(bjBotAction(table, node), 'hit')
+  player.cards = ['10S', '7D']
+  assert.equal(bjBotAction(table, node), 'stand')
+  assert.equal(bjBotAction(table, 'node-x'), null)
+})
+
+test('blackjack bots play a whole round to settlement', () => {
+  const table = bjNewTable([
+    { node: 'node-a', nick: '甲' },
+    { node: 'node-b', nick: '乙' },
+    { node: 'node-c', nick: '丙' },
+  ])
+  assert.equal(bjStartRound(table, seeded(5)).ok, true)
+  let guard = 0
+  while (table.phase === 'playing' && guard < 200) {
+    guard += 1
+    const node = table.turn
+    const action = bjBotAction(table, node)
+    assert.ok(action === 'hit' || action === 'stand', String(action))
+    const result = applyBj(table, node, action)
+    assert.equal(result.ok, true, JSON.stringify(result))
+  }
+  assert.equal(table.phase, 'result')
+  for (const player of table.players) {
+    assert.ok(['stand', 'bust', 'blackjack'].includes(player.status))
+  }
 })

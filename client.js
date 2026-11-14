@@ -245,7 +245,7 @@ window.__ModuleLoader__.load({
       botCountN: '{n} 个',
       autoFillBots: '自动补齐',
       autoFillBotsHint: '开启后按玩法推荐人数补满',
-      botCountHint: '按玩法推荐人数自动补齐（斗地主/跑得快 3 人、掼蛋/炸金花/德州 4 人）；后加入的真人会顶掉机器人；21 点与日麻暂不支持。',
+      botCountHint: '按玩法推荐人数自动补齐（斗地主/跑得快 3 人、掼蛋/炸金花/德州 4 人、21 点 4 人）；21 点基本策略（<17 要牌、≥17 停牌）；后加入的真人会顶掉机器人；日麻暂不支持。',
       noPlayersCard: '人数不足：斗地主/跑得快需要 3 人',
       botTag: '🤖 机器人',
       turnTimeout: '回合超时（秒）',
@@ -3137,6 +3137,10 @@ window.__ModuleLoader__.load({
       const head = h('div', { key: 'head', className: 'dsh-card-lan-row-head' }, [
         h('span', { key: 'name', className: 'dsh-card-lan-name' },
           asString(player.nick, '玩家') + (isSelf ? zh.meSuffix : '')),
+        // v16: blackjack bot seats are labelled like the card games.
+        player.bot === true
+          ? h('span', { key: 'bot', className: 'dsh-card-lan-bot-tag', title: zh.botTag }, zh.botTag)
+          : null,
         h('span', { key: 'status', className: 'dsh-card-lan-tag is-' + status },
           (STATUSES[status] !== undefined ? STATUSES[status] : status)
           + (cards.length > 0 ? ' · ' + fmt(zh.points, { n: total }) : '')),
