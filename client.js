@@ -2368,6 +2368,7 @@ window.__ModuleLoader__.load({
       const lastDiscardTile = lastDiscard !== null ? asString(lastDiscard.tile, '') : ''
       const lastDiscardFrom = lastDiscard !== null ? asString(lastDiscard.node, '') : ''
       const myFuriten = props.myFuriten === true
+      const serverCanRiichi = props.canRiichi === true
       const mustDiscard = props.mustDiscard === true
       const chiOptions = asArray(props.chiOptions)
         .map((option) => asArray(option).filter((tile) => typeof tile === 'string' && tile !== ''))
@@ -2507,7 +2508,7 @@ window.__ModuleLoader__.load({
       const ankanOptions = Object.keys(tileCounts).filter((tile) => tileCounts[tile] >= 4)
       const myMelds = me !== undefined ? asArray(meldsFor(me)) : []
       const closedHand = myMelds.length === 0
-      const canRiichi = myTurn && !myRiichi && closedHand && !mustDiscard
+      const canRiichi = serverCanRiichi && myTurn && !myRiichi && closedHand && !mustDiscard
         && myHand.length === 14 && myPoints >= 1000 && wall >= 4
         && !busy && !connectionBroken
       const kakanOptions = []
@@ -4852,6 +4853,7 @@ window.__ModuleLoader__.load({
           chiOptions: mjChiOptions,
           myFuriten: mjMyFuriten,
           mustDiscard: mjMustDiscard,
+          canRiichi: table.canRiichi === true,
           meldsFor: mahjongMeldsFor,
           points: mjPoints,
           riichiMap: mjRiichiMap,

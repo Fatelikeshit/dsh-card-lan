@@ -34,7 +34,7 @@ https://github.com/Fatelikeshit/dsh-card-lan
 
 命令行等价写法：`dsh plugin install https://github.com/Fatelikeshit/dsh-card-lan`。安装是热加载的：装完刷新一下 DSH 页面，设置里就会出现「牌桌联机」（没出现再重启 DSH）。
 
-本机开发也可以直接填本地目录路径。两端插件版本要一致（当前 0.17.0），局域网里房间名和端口保持一致。
+本机开发也可以直接填本地目录路径。两端插件版本要一致（当前 0.17.1），局域网里房间名和端口保持一致。
 
 装好后：
 
