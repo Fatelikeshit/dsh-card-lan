@@ -523,7 +523,6 @@ window.__ModuleLoader__.load({
       mj3TitleIdle: '日麻·三人 · 未开局',
       mj3Capsule: '日麻·三人 · 第 {n} 局',
       mj3CapsuleIdle: '日麻·三人 · 未开局',
-      mjRound: '東風 {n} 局',
       mjDealerMark: '莊',
       mjDoras: '宝牌',
       mjWall: '剩 {n} 张',
@@ -585,6 +584,17 @@ window.__ModuleLoader__.load({
       mjUraHanLine: '里宝 {n} 番',
       mjDeltasTitle: '点数变化',
       mjDeltaLine: '{name} {delta}',
+      mjRoundDealer: '東 {n} 局 · 庄家 {name}',
+      mjDealerName: '庄家 {name}',
+      mjDealerRepeat: '连庄',
+      mjMatchOver: '东风战结束',
+      mjNewMatch: '开始新东风战',
+      mjFinalRanking: '最终排名',
+      mjRankLine: '{rank}. {name} {points} 点',
+      mjTenpaiTitle: '流局结算',
+      mjTenpai: '听牌',
+      mjNoten: '不听',
+      mjRiichiKept: '立直棒保留（{n} 根）',
     }
 
     /** Tiny `{name}` interpolator for the copy above. */
@@ -2388,6 +2398,80 @@ window.__ModuleLoader__.load({
       const akaHan = asNumber(props.akaHan, -1)
       const uraHan = asNumber(props.uraHan, -1)
       const sticksAwarded = Math.max(0, asNumber(props.sticksAwarded, riichiSticks))
+      // Milestone ④: seat winds / tenpai / match end.
+      const seatWindMap = asObject(props.seatWindMap)
+      const tenpaiMap = asObject(props.tenpaiMap)
+      const matchOver = props.matchOver === true
+      const finalPoints = asArray(props.finalPoints)
+      const roundLabel = asString(props.roundLabel, '')
+      const dealerRepeat = props.dealerRepeat === true
+      const seatWindOf = (node, slot) => {
+        if (seatWindMap !== null && typeof seatWindMap[node] === 'string' && seatWindMap[node] !== '') {
+          return seatWindMap[node]
+        }
+        if (slot !== undefined && typeof slot.seatWind === 'string' && slot.seatWind !== '') return slot.seatWind
+        return ''
+      }
+      const tenpaiOf = (node, slot) => {
+        if (tenpaiMap !== null && typeof tenpaiMap[node] === 'boolean') return tenpaiMap[node]
+        if (slot !== undefined && typeof slot.tenpai === 'boolean') return slot.tenpai
+        return null
+      }
+      const windTextOf = (wind) => (wind === '' ? '' : readMahjongTile(wind).text)
+      const dealerNick = (() => {
+        for (const slot of players) {
+          if (asString(slot.node, '') === dealerNode) return asString(slot.nick, '玩家')
+        }
+        return '玩家'
+      })()
+      const rankingEntries = (() => {
+        if (!matchOver) return []
+        const rows = []
+        if (Array.isArray(finalPoints)) {
+          for (let index = 0; index < finalPoints.length; index += 1) {
+            const entry = finalPoints[index]
+            if (typeof entry === 'string') {
+              rows.push({ node: entry, rank: index + 1, nick: undefined, points: null })
+              continue
+            }
+            const record = asObject(entry)
+            if (record === null) continue
+            const rank = Number.isInteger(record.rank)
+              ? record.rank
+              : (Number.isInteger(record.place) ? record.place : index + 1)
+            const points = Number.isFinite(record.points)
+              ? Math.round(record.points)
+              : (Number.isFinite(record.score) ? Math.round(record.score) : null)
+            rows.push({
+              node: asString(record.node, ''),
+              rank,
+              nick: asString(record.nick, asString(record.name, '')),
+              points,
+            })
+          }
+        } else {
+          const map = asObject(finalPoints)
+          if (map !== null) {
+            const entries = Object.keys(map)
+              .filter((node) => Number.isFinite(map[node]))
+              .map((node) => ({ node, points: Math.round(map[node]) }))
+            entries.sort((a, b) => b.points - a.points)
+            for (let index = 0; index < entries.length; index += 1) {
+              rows.push({ node: entries[index].node, rank: index + 1, nick: undefined, points: entries[index].points })
+            }
+          }
+        }
+        return rows.map((row) => {
+          const slot = players.find((candidate) => asString(candidate.node, '') === row.node)
+          const nick = row.nick !== undefined && row.nick !== ''
+            ? row.nick
+            : (slot !== undefined ? asString(slot.nick, '玩家') : '玩家')
+          const points = row.points !== null && row.points !== undefined
+            ? row.points
+            : (row.node !== '' ? pointOf(row.node) : 0)
+          return { rank: row.rank, nick, points }
+        })
+      })()
       const riichiOf = (node) => {
         if (riichiMapIn !== null && riichiMapIn[node] === true) return true
         for (const slot of players) {
@@ -2462,12 +2546,17 @@ window.__ModuleLoader__.load({
         ])
       }
 
-      /* ---------- header extras: round, dealer, doras, wall, nuki, timer ---------- */
+      /* ---------- header extras: round/dealer, doras, wall, nuki, timer ---------- */
       const headExtras = [
         h('span', { key: 'game', className: 'dsh-card-lan-pill is-game-' + game }, GAME_LABELS[game]),
         h('span', { key: 'round', className: 'dsh-card-lan-tag is-mj-round' },
-          fmt(zh.mjRound, { n: Math.max(1, round) })),
+          roundLabel !== ''
+            ? roundLabel + ' · ' + fmt(zh.mjDealerName, { name: dealerNick })
+            : fmt(zh.mjRoundDealer, { n: Math.max(1, round), name: dealerNick })),
       ]
+      if (dealerRepeat) {
+        headExtras.push(h('span', { key: 'repeat', className: 'dsh-card-lan-tag is-mj-repeat' }, zh.mjDealerRepeat))
+      }
       // All dora indicators (M2 may expose several after kans).
       const doraTiles = doras.length > 0 ? doras : (doraIndicator !== '' ? [doraIndicator] : [])
       headExtras.push(h('span', { key: 'dora', className: 'dsh-card-lan-tag is-mj-dora' }, [
@@ -2526,12 +2615,13 @@ window.__ModuleLoader__.load({
           const node = asString(slot.node, '')
           const nick = asString(slot.nick, '玩家')
           const isDealerSeat = node !== '' && node === dealerNode
+          const windText = windTextOf(seatWindOf(node, slot))
           pointChips.push(h('span', {
             key: 'pt:' + index,
             className: 'dsh-card-lan-mj-point'
               + (node !== '' && node === myNode ? ' is-self' : '')
               + (isDealerSeat ? ' is-dealer' : ''),
-          }, nick + ' ' + fmt(zh.mjPointValue, { n: pointOf(node) })))
+          }, (windText !== '' ? windText + ' ' : '') + nick + ' ' + fmt(zh.mjPointValue, { n: pointOf(node) })))
         }
         bodyNodes.push(h('div', { key: 'points', className: 'dsh-card-lan-mj-points' }, [
           h('span', { key: 'label', className: 'dsh-card-lan-mj-riverlabel' }, zh.mjPoints),
@@ -2572,9 +2662,19 @@ window.__ModuleLoader__.load({
         const classes = ['dsh-card-lan-row', 'dsh-card-lan-mj-seat']
         if (isTurn) classes.push('is-turn')
         if (winning) classes.push('is-winner')
-        const tags = [
-          h('span', { key: 'count', className: 'dsh-card-lan-tag' }, fmt(zh.mjHandCount, { n: handCount })),
-        ]
+        const seatWindText = windTextOf(seatWindOf(node, slot))
+        const seatTenpai = tenpaiOf(node, slot)
+        const tags = []
+        if (seatWindText !== '') {
+          tags.push(h('span', { key: 'wind', className: 'dsh-card-lan-tag is-mj-wind' }, seatWindText))
+        }
+        tags.push(h('span', { key: 'count', className: 'dsh-card-lan-tag' }, fmt(zh.mjHandCount, { n: handCount })))
+        if (seatTenpai !== null && phase === 'result') {
+          tags.push(h('span', {
+            key: 'tenpai',
+            className: 'dsh-card-lan-tag' + (seatTenpai ? ' is-mj-tenpai' : ''),
+          }, seatTenpai ? zh.mjTenpai : zh.mjNoten))
+        }
         if (pointsMap !== null) {
           tags.push(h('span', { key: 'points', className: 'dsh-card-lan-tag is-mj-pointtag' },
             fmt(zh.mjPointValue, { n: pointOf(node) })))
@@ -2618,6 +2718,15 @@ window.__ModuleLoader__.load({
       if (!isSpectator) {
         const handHead = [
           h('span', { key: 'label', className: 'dsh-card-lan-label' }, fmt(zh.mjMyHand, { n: myHand.length })),
+          windTextOf(seatWindOf(myNode, me)) !== ''
+            ? h('span', { key: 'wind', className: 'dsh-card-lan-tag is-mj-wind' }, windTextOf(seatWindOf(myNode, me)))
+            : null,
+          tenpaiOf(myNode, me) !== null && phase === 'result'
+            ? h('span', {
+              key: 'tenpai',
+              className: 'dsh-card-lan-tag' + (tenpaiOf(myNode, me) ? ' is-mj-tenpai' : ''),
+            }, tenpaiOf(myNode, me) ? zh.mjTenpai : zh.mjNoten)
+            : null,
           selectedIndexes.length > 0
             ? h('span', { key: 'sel', className: 'dsh-card-lan-tag is-turn' },
               fmt(zh.mjSelected, { n: selectedIndexes.length }))
@@ -2661,6 +2770,10 @@ window.__ModuleLoader__.load({
           bannerText = zh.mjExhausted
         } else if (result === 'tsumo' || result === 'ron' || result === 'win' || winnerNode !== '') {
           bannerText = zh.mjWin + (winnerNick !== '' ? ' · ' + fmt(zh.mjWinner, { name: winnerNick }) : '')
+          bannerClass = 'dsh-card-lan-banner is-win'
+        }
+        if (matchOver) {
+          bannerText = zh.mjMatchOver
           bannerClass = 'dsh-card-lan-banner is-win'
         }
         bodyNodes.push(h('div', { key: 'result', className: bannerClass, role: 'status' }, bannerText))
@@ -2775,6 +2888,59 @@ window.__ModuleLoader__.load({
         }
         if (detailChildren.length > 0) {
           bodyNodes.push(h('div', { key: 'detail', className: 'dsh-card-lan-mj-resultpanel' }, detailChildren))
+        }
+
+        // Milestone ④: exhausted tenpai / noten penalty rows (when the host
+        // exposes per-player tenpai flags).
+        if (exhausted) {
+          const tenpaiLines = []
+          for (let index = 0; index < players.length; index += 1) {
+            const slot = players[index]
+            const node = asString(slot.node, '')
+            const tenpaiState = tenpaiOf(node, slot)
+            if (tenpaiState === null) continue
+            const rawDelta = deltasMap !== null ? deltasMap[node] : undefined
+            const deltaText = Number.isFinite(rawDelta)
+              ? (Math.round(rawDelta) > 0 ? '+' + Math.round(rawDelta) : String(Math.round(rawDelta)))
+              : ''
+            tenpaiLines.push(h('div', {
+              key: 'tp:' + index,
+              className: 'dsh-card-lan-mj-tenpairow' + (tenpaiState ? ' is-tenpai' : ''),
+            }, [
+              h('span', { key: 'nick', className: 'dsh-card-lan-name' }, asString(slot.nick, '玩家')),
+              h('span', {
+                key: 'tag',
+                className: 'dsh-card-lan-tag' + (tenpaiState ? ' is-mj-tenpai' : ''),
+              }, tenpaiState ? zh.mjTenpai : zh.mjNoten),
+              deltaText !== ''
+                ? h('span', { key: 'delta', className: 'dsh-card-lan-mj-deltaline' }, deltaText)
+                : null,
+            ]))
+          }
+          if (tenpaiLines.length > 0) {
+            bodyNodes.push(h('div', { key: 'tenpai', className: 'dsh-card-lan-mj-tenpais' }, [
+              h('div', { key: 'title', className: 'dsh-card-lan-label' }, zh.mjTenpaiTitle),
+              ...tenpaiLines,
+            ]))
+          }
+          if (riichiSticks > 0) {
+            bodyNodes.push(h('div', { key: 'sticksKept', className: 'dsh-card-lan-mj-resultline' },
+              fmt(zh.mjRiichiKept, { n: riichiSticks })))
+          }
+        }
+
+        // Milestone ④: final ranking when the east-round match is over.
+        if (matchOver) {
+          const rankLines = rankingEntries.map((row, index) => h('div', {
+            key: 'rank:' + index,
+            className: 'dsh-card-lan-mj-rankline',
+          }, fmt(zh.mjRankLine, { rank: row.rank, name: row.nick, points: row.points })))
+          if (rankLines.length > 0) {
+            bodyNodes.push(h('div', { key: 'ranking', className: 'dsh-card-lan-mj-ranking' }, [
+              h('div', { key: 'title', className: 'dsh-card-lan-label' }, zh.mjFinalRanking),
+              ...rankLines,
+            ]))
+          }
         }
 
         const revealLines = []
@@ -2939,7 +3105,9 @@ window.__ModuleLoader__.load({
           className: 'dsh-card-lan-button dsh-card-lan-button-primary',
           disabled: busy || connectionBroken,
           onClick: () => void props.startRound(),
-        }, phase === 'result' ? zh.ddzNextRound : zh.ddzStart))
+        }, phase === 'result'
+          ? (matchOver ? zh.mjNewMatch : zh.ddzNextRound)
+          : zh.ddzStart))
       }
 
       return { headExtras, hint, bodyNodes, actionNodes }
@@ -4634,6 +4802,18 @@ window.__ModuleLoader__.load({
       const mjDoraHan = isMahjong ? asNumber(mjPick('doraHan', -1), -1) : -1
       const mjAkaHan = isMahjong ? asNumber(mjPick('akaHan', -1), -1) : -1
       const mjUraHan = isMahjong ? asNumber(mjPick('uraHan', -1), -1) : -1
+      // Milestone ④: seat winds / tenpai / match end.
+      const mjSeatWindMap = isMahjong ? asObject(mjPick('seatWind', null)) : null
+      const mjTenpaiMap = isMahjong ? asObject(mjPick('tenpai', null)) : null
+      const mjMatchOver = isMahjong && mjPick('matchOver', false) === true
+      const mjFinalPoints = isMahjong ? mjPick('finalPoints', []) : []
+      const mjRoundLabel = isMahjong ? asString(mjPick('roundLabel', ''), '') : ''
+      const mjDealerRepeat = isMahjong
+        && (mjPick('dealerRepeat', false) === true
+          || mjPick('renchan', false) === true
+          || mjPick('repeated', false) === true
+          || (Number.isInteger(mjPick('honba', 0)) && mjPick('honba', 0) > 0)
+          || (Number.isInteger(mjPick('dealerRepeatCount', 0)) && mjPick('dealerRepeatCount', 0) > 0))
       const mahjongGame = isMahjong
         ? buildMahjongContent({
           game,
@@ -4672,6 +4852,12 @@ window.__ModuleLoader__.load({
           doraHan: mjDoraHan,
           akaHan: mjAkaHan,
           uraHan: mjUraHan,
+          seatWindMap: mjSeatWindMap,
+          tenpaiMap: mjTenpaiMap,
+          matchOver: mjMatchOver,
+          finalPoints: mjFinalPoints,
+          roundLabel: mjRoundLabel,
+          dealerRepeat: mjDealerRepeat,
           riichiCall,
           result: asString(table.result, ''),
           winnerNode: asString(table.winnerNode, asString(table.winner, '')),
@@ -5293,6 +5479,18 @@ window.__ModuleLoader__.load({
       '.dsh-card-lan-mj-deltaline{font-size:11px;line-height:1.5;color:#cbd5e1;font-variant-numeric:tabular-nums}',
       '.dsh-card-lan-mj-deltaline.is-plus{color:#4ade80}',
       '.dsh-card-lan-mj-deltaline.is-minus{color:#f87171}',
+      '.dsh-card-lan-tag.is-mj-wind{background:rgba(56,189,248,.14);border-color:rgba(56,189,248,.35);',
+      'color:#7dd3fc;font-weight:700}',
+      '.dsh-card-lan-tag.is-mj-repeat{background:rgba(251,146,60,.16);border-color:rgba(251,146,60,.4);',
+      'color:#fb923c;font-weight:600}',
+      '.dsh-card-lan-tag.is-mj-tenpai{background:rgba(34,197,94,.16);border-color:rgba(34,197,94,.4);color:#4ade80}',
+      '.dsh-card-lan-mj-tenpais{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:8px;',
+      'background:rgba(148,163,184,.08);border:1px solid rgba(148,163,184,.22)}',
+      '.dsh-card-lan-mj-tenpairow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px}',
+      '.dsh-card-lan-mj-tenpairow.is-tenpai{color:#86efac}',
+      '.dsh-card-lan-mj-ranking{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:8px;',
+      'background:rgba(250,204,21,.08);border:1px solid rgba(250,204,21,.3)}',
+      '.dsh-card-lan-mj-rankline{font-size:12px;line-height:1.6;color:#fde68a;font-variant-numeric:tabular-nums}',
       '.dsh-card-lan-row-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
       '.dsh-card-lan-name{font-weight:600;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dsh-card-lan-hand{display:flex;align-items:center;gap:5px;flex-wrap:wrap;min-height:40px}',

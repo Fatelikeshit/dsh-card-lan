@@ -8,6 +8,7 @@ import {
   doraTile,
   isKokushi,
   isSevenPairs,
+  isTenpai,
   isWinningHand,
   onTimeout,
   snapshot,
@@ -305,4 +306,92 @@ test('dora indicators map to the next tile', () => {
   assert.equal(doraTile('E'), 'S')
   assert.equal(doraTile('C'), 'E')
   assert.equal(doraTile('5p'), '6p')
+})
+
+test('seat winds and the round label follow the dealer', () => {
+  const state = setup4(61)
+  const view = snapshot(state, 'node-a', { role: 'player', hostNode: 'node-a', staleMs: 0, turnRemainingMs: 30000 })
+  assert.equal(view.round, 1)
+  assert.equal(view.roundLabel, '东1局')
+  const winds = new Map(view.players.map((player) => [player.node, player.seatWind]))
+  assert.deepEqual([winds.get('node-a'), winds.get('node-b'), winds.get('node-c'), winds.get('node-d')], ['E', 'S', 'W', 'N'])
+
+  const three = table('mahjong3')
+  startRound(three, seeded(61))
+  const threeView = snapshot(three, 'node-a', { role: 'player', hostNode: 'node-a', staleMs: 0, turnRemainingMs: 30000 })
+  assert.deepEqual(threeView.players.map((player) => player.seatWind), ['E', 'S', 'W'])
+})
+
+test('tenpai detection finds waits and rejects broken hands', () => {
+  const state = setup4(63)
+  const player = state.players[0]
+  player.hand = ['1m', '2m', '3m', '4p', '5p', '6p', '7s', '8s', '9s', '1p', '2p', '2s', '2s']
+  player.melds = []
+  assert.equal(isTenpai(player), true)
+  player.hand = ['1m', '1m', '4m', '7m', '1p', '1p', '4p', '7p', '1s', '1s', '4s', '7s', 'E']
+  assert.equal(isTenpai(player), false)
+})
+
+test('dealer win is renchan while a non-dealer win rotates the dealer', () => {
+  const winning = ['1m', '2m', '3m', '4p', '5p', '6p', '7s', '8s', '9s', '1p', '2p', '3p', '2s', '2s']
+
+  const state = setup4(65)
+  const dealer = state.players[0]
+  dealer.hand = winning.slice()
+  dealer.drawnTile = winning[0]
+  dealer.melds = []
+  dealer.riichi = false
+  state.turn = dealer.node
+  state.mustDiscard = false
+  state.doras = []
+  state.doraIndicator = 'E'
+  assert.equal(applyAction(state, dealer.node, { type: 'tsumo' }).ok, true)
+  assert.equal(state.phase, 'result')
+  assert.equal(state.renchan, true)
+  assert.equal(state.dealer, 'node-a')
+  assert.equal(state.round, 1)
+
+  const rotated = setup4(67)
+  const other = rotated.players[1]
+  other.hand = winning.slice()
+  other.drawnTile = winning[0]
+  other.melds = []
+  other.riichi = false
+  rotated.turn = other.node
+  rotated.mustDiscard = false
+  rotated.doras = []
+  rotated.doraIndicator = 'E'
+  assert.equal(applyAction(rotated, other.node, { type: 'tsumo' }).ok, true)
+  assert.equal(rotated.renchan, false)
+  startRound(rotated, seeded(68))
+  assert.equal(rotated.dealer, 'node-b')
+  assert.equal(rotated.round, 2)
+})
+
+test('the last east hand ends the match and start begins a new game', () => {
+  const winning = ['1m', '2m', '3m', '4p', '5p', '6p', '7s', '8s', '9s', '1p', '2p', '3p', '2s', '2s']
+  const state = setup4(69)
+  state.round = 4
+  state.dealer = 'node-a'
+  const other = state.players[1]
+  other.hand = winning.slice()
+  other.drawnTile = winning[0]
+  other.melds = []
+  other.riichi = false
+  state.turn = other.node
+  state.mustDiscard = false
+  state.doras = []
+  state.doraIndicator = 'E'
+  assert.equal(applyAction(state, other.node, { type: 'tsumo' }).ok, true)
+  assert.equal(state.matchOver, true)
+  const view = snapshot(state, 'node-a', { role: 'player', hostNode: 'node-a', staleMs: 0, turnRemainingMs: 30000 })
+  assert.equal(Array.isArray(view.finalPoints), true)
+  assert.equal(view.finalPoints.length, 4)
+
+  startRound(state, seeded(71))
+  assert.equal(state.matchOver, false)
+  assert.equal(state.round, 1)
+  assert.equal(state.dealer, 'node-a')
+  const fresh = snapshot(state, 'node-a', { role: 'player', hostNode: 'node-a', staleMs: 0, turnRemainingMs: 30000 })
+  assert.equal(fresh.points['node-a'], 25000)
 })
