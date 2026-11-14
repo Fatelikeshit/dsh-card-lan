@@ -132,7 +132,7 @@ window.__ModuleLoader__.load({
     const TX_RAISE_STEP = 20
 
     /** Japanese Mahjong (PROTOCOL §7.18): 4-player and 3-player variants. */
-    const MJ_PHASES = { idle: '等待开始', playing: '对局中', result: '本局结束' }
+    const MJ_PHASES = { idle: '等待开始', playing: '对局中', calling: '鸣牌中', result: '本局结束' }
     const MJ_WIDTH = 740
     const MJ_SUIT_TEXT = { m: '萬', p: '筒', s: '索' }
     const MJ_HONOR_TEXT = { E: '東', S: '南', W: '西', N: '北', P: '白', F: '發', C: '中' }
@@ -189,6 +189,9 @@ window.__ModuleLoader__.load({
       'bad-raise': '加注额不合法：不满足最低加注或筹码不足。',
       'bad-tile': '这张牌不在你的手牌里，换一张再试。',
       'not-winning': '现在的牌型不能和了。',
+      'not-pending': '现在没有需要你响应的鸣牌。',
+      'bad-call': '这个鸣牌动作不合法，或不能这样吃碰杠。',
+      'furiten': '振听中，不能荣和。',
       'must-play': '轮到你领出，必须出牌，不能不要。',
       'bad-phase': '现在不是这个阶段，做不了这个操作。',
       'invalid-game': '不认识的玩法，只支持 21 点和斗地主。',
@@ -520,7 +523,7 @@ window.__ModuleLoader__.load({
       mj3CapsuleIdle: '日麻·三人 · 未开局',
       mjRound: '東風 {n} 局',
       mjDealerMark: '莊',
-      mjDora: '宝牌',
+      mjDoras: '宝牌',
       mjWall: '剩 {n} 张',
       mjNuki: '拔北 {n}',
       mjHandCount: '手牌 {n} 张',
@@ -539,6 +542,25 @@ window.__ModuleLoader__.load({
       mjHintWait: '等待 {name} 出手…',
       mjSelectHint: '请选择要打出的牌',
       mjSelected: '已选 {n} 张',
+      mjDoras: '宝牌',
+      mjCallBar: '{name} 打出 {tile}',
+      mjCallWait: '等待其他玩家响应…',
+      mjRon: '荣和',
+      mjPon: '碰',
+      mjKan: '杠',
+      mjChi: '吃',
+      mjPass: '过',
+      mjChiChoice: '选择吃法',
+      mjChiOption: '吃 {a}+{b}',
+      mjMeldChi: '吃',
+      mjMeldPon: '碰',
+      mjMeldKan: '明杠',
+      mjMeldAnkan: '暗杠',
+      mjMeldKakan: '加杠',
+      mjMelds: '副露',
+      mjAnkanButton: '暗杠 {tile}',
+      mjKakanButton: '加杠 {tile}',
+      mjFuriten: '振听中（不能荣和）',
     }
 
     /** Tiny `{name}` interpolator for the copy above. */
@@ -2300,6 +2322,29 @@ window.__ModuleLoader__.load({
       const wall = Math.max(0, asNumber(props.wall, 0))
       const nuki = Math.max(0, asNumber(props.nuki, 0))
       const doraIndicator = asString(props.doraIndicator, '')
+      // Milestone ②: full dora indicator list, call window, melds, furiten.
+      const doras = asArray(props.doras).filter((tile) => typeof tile === 'string' && tile !== '')
+      const pendingEntry = asObject(props.pendingEntry)
+      const lastDiscard = asObject(props.lastDiscard)
+      const lastDiscardTile = lastDiscard !== null ? asString(lastDiscard.tile, '') : ''
+      const lastDiscardFrom = lastDiscard !== null ? asString(lastDiscard.node, '') : ''
+      const myFuriten = props.myFuriten === true
+      const mustDiscard = props.mustDiscard === true
+      const chiOptions = asArray(props.chiOptions)
+        .map((option) => asArray(option).filter((tile) => typeof tile === 'string' && tile !== ''))
+        .filter((tiles) => tiles.length === 2)
+      const meldsFor = typeof props.meldsFor === 'function' ? props.meldsFor : () => []
+      const callAllowed = (name) => pendingEntry !== null
+        && asArray(pendingEntry.allowed).map((value) => asString(value, '')).indexOf(name) !== -1
+      const callable = pendingEntry !== null
+        && (callAllowed('ron') || callAllowed('pon') || callAllowed('kan') || callAllowed('chi'))
+      const lastDiscardNick = (() => {
+        if (lastDiscardFrom === '') return '玩家'
+        for (const slot of players) {
+          if (asString(slot.node, '') === lastDiscardFrom) return asString(slot.nick, '玩家')
+        }
+        return '玩家'
+      })()
       const result = asString(props.result, '')
       const winnerNode = asString(props.winnerNode, '')
       const discardsFor = typeof props.discardsFor === 'function' ? props.discardsFor : () => []
@@ -2313,26 +2358,77 @@ window.__ModuleLoader__.load({
       const selectedTile = selectedIndexes.length === 1 && myHand[selectedIndexes[0]] !== undefined
         ? myHand[selectedIndexes[0]]
         : ''
+      // Own-turn kan candidates (M2): four-of-a-kind in hand, or a pon + 4th.
+      const tileCounts = {}
+      for (const tile of myHand) tileCounts[tile] = (tileCounts[tile] || 0) + 1
+      const ankanOptions = Object.keys(tileCounts).filter((tile) => tileCounts[tile] >= 4)
+      const myMelds = me !== undefined ? asArray(meldsFor(me)) : []
+      const kakanOptions = []
+      for (const meld of myMelds) {
+        const entry = asObject(meld)
+        if (entry === null || asString(entry.type, '') !== 'pon') continue
+        const tiles = asArray(entry.tiles).filter((tile) => typeof tile === 'string' && tile !== '')
+        if (tiles.length < 3) continue
+        const tile = tiles[0]
+        if (tile !== undefined && myHand.indexOf(tile) !== -1 && kakanOptions.indexOf(tile) === -1) {
+          kakanOptions.push(tile)
+        }
+      }
 
-      /* ---------- header extras: round, dealer, dora, wall, nuki, timer ---------- */
+      /** One meld as small tiles plus a type mark (ankan shows backs). */
+      const meldNode = (meld, keyPrefix, index) => {
+        const entry = asObject(meld)
+        if (entry === null) return null
+        const type = asString(entry.type, '')
+        const tiles = asArray(entry.tiles).filter((tile) => typeof tile === 'string' && tile !== '')
+        if (tiles.length === 0) return null
+        const labels = {
+          chi: zh.mjMeldChi,
+          pon: zh.mjMeldPon,
+          kan: zh.mjMeldKan,
+          ankan: zh.mjMeldAnkan,
+          kakan: zh.mjMeldKakan,
+        }
+        const label = labels[type] !== undefined ? labels[type] : type
+        const tileNodes = type === 'ankan'
+          ? [0, 1, 2, 3].map((backIndex) => h('span', {
+            key: 'b:' + backIndex,
+            className: 'dsh-card-lan-mj-tile is-small is-back',
+            title: zh.mjMeldAnkan,
+            'aria-label': zh.mjMeldAnkan,
+          }))
+          : tiles.map((tile, tileIndex) => mahjongTileNode(tile, 'm:' + tileIndex, null, null, true))
+        return h('div', { key: keyPrefix + ':' + index, className: 'dsh-card-lan-mj-meld' }, [
+          h('span', { key: 'label', className: 'dsh-card-lan-mj-meldlabel' }, label),
+          ...tileNodes,
+        ])
+      }
+
+      /* ---------- header extras: round, dealer, doras, wall, nuki, timer ---------- */
       const headExtras = [
         h('span', { key: 'game', className: 'dsh-card-lan-pill is-game-' + game }, GAME_LABELS[game]),
         h('span', { key: 'round', className: 'dsh-card-lan-tag is-mj-round' },
           fmt(zh.mjRound, { n: Math.max(1, round) })),
-        h('span', { key: 'dora', className: 'dsh-card-lan-tag is-mj-dora' }, [
-          h('span', { key: 'label' }, zh.mjDora + '：'),
-          doraIndicator !== '' ? mahjongTileNode(doraIndicator, 'indicator', null, null, true)
-            : h('span', { key: 'none' }, '—'),
-        ]),
-        h('span', { key: 'wall', className: 'dsh-card-lan-tag' }, fmt(zh.mjWall, { n: wall })),
       ]
+      // All dora indicators (M2 may expose several after kans).
+      const doraTiles = doras.length > 0 ? doras : (doraIndicator !== '' ? [doraIndicator] : [])
+      headExtras.push(h('span', { key: 'dora', className: 'dsh-card-lan-tag is-mj-dora' }, [
+        h('span', { key: 'label' }, zh.mjDoras + '：'),
+        ...(doraTiles.length > 0
+          ? doraTiles.map((tile, index) => mahjongTileNode(tile, 'indicator:' + index, null, null, true))
+          : [h('span', { key: 'none' }, '—')]),
+      ]))
+      headExtras.push(h('span', { key: 'wall', className: 'dsh-card-lan-tag' }, fmt(zh.mjWall, { n: wall })))
       if (isThree) {
         headExtras.push(h('span', { key: 'nuki', className: 'dsh-card-lan-tag' }, fmt(zh.mjNuki, { n: nuki })))
       }
       if (dealerNode !== '') {
         headExtras.push(h('span', { key: 'dealer', className: 'dsh-card-lan-tag is-mj-dealer' }, zh.mjDealerMark))
       }
-      if (phase === 'playing' && turnRemainingMs >= 0) {
+      if (myFuriten) {
+        headExtras.push(h('span', { key: 'furiten', className: 'dsh-card-lan-tag is-mj-furiten' }, zh.mjFuriten))
+      }
+      if ((phase === 'playing' || phase === 'calling') && turnRemainingMs >= 0) {
         headExtras.push(h('span', { key: 'countdown', className: 'dsh-card-lan-tag is-turn' },
           fmt(zh.ddzCountdown, { n: Math.max(0, Math.ceil(turnRemainingMs / 1000)) })))
       }
@@ -2345,6 +2441,8 @@ window.__ModuleLoader__.load({
         hint = role === 'host' ? zh.ddzIdleHost : zh.ddzWaitStart
       } else if (phase === 'result') {
         hint = role === 'host' ? zh.ddzResultHost : zh.ddzWaitNext
+      } else if (phase === 'calling') {
+        hint = callable ? zh.mjCallBar : zh.mjCallWait
       } else if (myTurn) {
         hint = zh.mjHintYourTurn
       } else {
@@ -2352,6 +2450,23 @@ window.__ModuleLoader__.load({
       }
 
       const bodyNodes = []
+
+      /* ---------- call window: who discarded what + pending player's options ---------- */
+      if (phase === 'calling') {
+        bodyNodes.push(h('div', { key: 'calling', className: 'dsh-card-lan-mj-call' }, [
+          h('span', { key: 'text', className: 'dsh-card-lan-mj-calltext' },
+            lastDiscardTile !== ''
+              ? fmt(zh.mjCallBar, {
+                name: lastDiscardNick,
+                tile: readMahjongTile(lastDiscardTile).text,
+              })
+              : zh.mjCallWait),
+          turnRemainingMs >= 0
+            ? h('span', { key: 'timer', className: 'dsh-card-lan-tag is-turn' },
+              fmt(zh.ddzCountdown, { n: Math.max(0, Math.ceil(turnRemainingMs / 1000)) }))
+            : null,
+        ]))
+      }
 
       /* ---------- other seats: nickname, hand count, river, turn ---------- */
       const others = players.filter((slot) => slot !== me)
@@ -2382,6 +2497,10 @@ window.__ModuleLoader__.load({
         const riverNodes = river.length > 0
           ? river.map((tile, riverIndex) => mahjongTileNode(tile, 'r:' + riverIndex, null, null, true))
           : [h('span', { key: 'empty', className: 'dsh-card-lan-empty' }, zh.mjEmptyRiver)]
+        const seatMelds = asArray(meldsFor(slot))
+        const meldNodes = seatMelds
+          .map((meld, meldIndex) => meldNode(meld, 'seatMelds', meldIndex))
+          .filter((node) => node !== null)
         bodyNodes.push(h('div', { key: 'seat:' + node + ':' + index, className: classes.join(' ') }, [
           h('div', { key: 'headline', className: 'dsh-card-lan-row-head' }, [
             h('span', { key: 'nick', className: 'dsh-card-lan-name' }, nick),
@@ -2391,6 +2510,12 @@ window.__ModuleLoader__.load({
             h('span', { key: 'label', className: 'dsh-card-lan-mj-riverlabel' }, zh.mjRiver),
             ...riverNodes,
           ]),
+          meldNodes.length > 0
+            ? h('div', { key: 'melds', className: 'dsh-card-lan-mj-melds' }, [
+              h('span', { key: 'label', className: 'dsh-card-lan-mj-riverlabel' }, zh.mjMelds),
+              ...meldNodes,
+            ])
+            : null,
         ]))
       }
 
@@ -2413,6 +2538,17 @@ window.__ModuleLoader__.load({
         ))
         bodyNodes.push(h('div', { key: 'myHand', className: 'dsh-card-lan-mj-hand-area' }, [
           h('div', { key: 'head', className: 'dsh-card-lan-row-head' }, handHead),
+          (() => {
+            const ownMelds = myMelds
+              .map((meld, meldIndex) => meldNode(meld, 'ownMelds', meldIndex))
+              .filter((node) => node !== null)
+            return ownMelds.length > 0
+              ? h('div', { key: 'melds', className: 'dsh-card-lan-mj-melds' }, [
+                h('span', { key: 'label', className: 'dsh-card-lan-mj-riverlabel' }, zh.mjMelds),
+                ...ownMelds,
+              ])
+              : null
+          })(),
           handNodes.length > 0
             ? h('div', { key: 'tiles', className: 'dsh-card-lan-mj-hand' }, handNodes)
             : h('span', { key: 'empty', className: 'dsh-card-lan-empty' }, zh.mjSelectHint),
@@ -2428,7 +2564,7 @@ window.__ModuleLoader__.load({
         let bannerClass = 'dsh-card-lan-banner is-none'
         if (exhausted) {
           bannerText = zh.mjExhausted
-        } else if (result === 'tsumo' || result === 'win' || winnerNode !== '') {
+        } else if (result === 'tsumo' || result === 'ron' || result === 'win' || winnerNode !== '') {
           bannerText = zh.mjWin + (winnerNick !== '' ? ' · ' + fmt(zh.mjWinner, { name: winnerNick }) : '')
           bannerClass = 'dsh-card-lan-banner is-win'
         }
@@ -2460,32 +2596,118 @@ window.__ModuleLoader__.load({
         ]))
       }
 
-      /* ---------- actions: discard / nuki (3P) / tsumo / start ---------- */
+      /* ---------- actions: calls (calling) / discard / nuki / tsumo / kans / start ---------- */
       const actionNodes = []
+      const callDisabled = busy || connectionBroken
+      if (phase === 'calling' && pendingEntry !== null) {
+        if (callAllowed('ron')) {
+          actionNodes.push(h('button', {
+            key: 'ron',
+            type: 'button',
+            className: 'dsh-card-lan-button dsh-card-lan-button-primary',
+            disabled: callDisabled || myFuriten,
+            onClick: () => void props.ronCall(),
+          }, zh.mjRon))
+        }
+        if (callAllowed('pon')) {
+          actionNodes.push(h('button', {
+            key: 'pon',
+            type: 'button',
+            className: 'dsh-card-lan-button',
+            disabled: callDisabled || lastDiscardTile === '',
+            onClick: () => void props.ponCall(),
+          }, zh.mjPon))
+        }
+        if (callAllowed('kan')) {
+          actionNodes.push(h('button', {
+            key: 'kan',
+            type: 'button',
+            className: 'dsh-card-lan-button',
+            disabled: callDisabled || lastDiscardTile === '',
+            onClick: () => void props.kanCall(),
+          }, zh.mjKan))
+        }
+        if (callAllowed('chi')) {
+          if (chiOptions.length > 1) {
+            actionNodes.push(h('span', { key: 'chiLabel', className: 'dsh-card-lan-mj-calltext' }, zh.mjChiChoice))
+            for (let index = 0; index < chiOptions.length; index += 1) {
+              const option = chiOptions[index]
+              actionNodes.push(h('button', {
+                key: 'chi:' + index,
+                type: 'button',
+                className: 'dsh-card-lan-button dsh-card-lan-button-small',
+                disabled: callDisabled,
+                onClick: () => void props.chiCall(option),
+              }, fmt(zh.mjChiOption, {
+                a: readMahjongTile(option[0]).text,
+                b: readMahjongTile(option[1]).text,
+              })))
+            }
+          } else {
+            actionNodes.push(h('button', {
+              key: 'chi',
+              type: 'button',
+              className: 'dsh-card-lan-button',
+              disabled: callDisabled,
+              onClick: () => void props.chiCall(chiOptions.length > 0 ? chiOptions[0] : []),
+            }, zh.mjChi))
+          }
+        }
+        actionNodes.push(h('button', {
+          key: 'callPass',
+          type: 'button',
+          className: 'dsh-card-lan-button',
+          disabled: callDisabled,
+          onClick: () => void props.passCall(),
+        }, zh.mjPass))
+      }
       if (myTurn) {
         actionNodes.push(h('button', {
           key: 'discard',
           type: 'button',
           className: 'dsh-card-lan-button dsh-card-lan-button-primary',
-          disabled: busy || connectionBroken || selectedTile === '',
+          disabled: busy || selectedTile === '',
           onClick: () => void props.discardSelected(),
         }, zh.mjDiscard))
-        if (isThree && hasNorth) {
+        // mustDiscard (after a call/kan) only offers discard-type actions.
+        if (!mustDiscard) {
+          if (isThree && hasNorth) {
+            actionNodes.push(h('button', {
+              key: 'nuki',
+              type: 'button',
+              className: 'dsh-card-lan-button',
+              disabled: busy || connectionBroken,
+              onClick: () => void props.nukiTile(),
+            }, zh.mjNukiBtn))
+          }
           actionNodes.push(h('button', {
-            key: 'nuki',
+            key: 'tsumo',
             type: 'button',
             className: 'dsh-card-lan-button',
             disabled: busy || connectionBroken,
-            onClick: () => void props.nukiTile(),
-          }, zh.mjNukiBtn))
+            onClick: () => void props.tsumoWin(),
+          }, zh.mjTsumo))
+          for (let index = 0; index < ankanOptions.length; index += 1) {
+            const tile = ankanOptions[index]
+            actionNodes.push(h('button', {
+              key: 'ankan:' + index,
+              type: 'button',
+              className: 'dsh-card-lan-button dsh-card-lan-button-small',
+              disabled: busy || connectionBroken,
+              onClick: () => void props.ankanCall(tile),
+            }, fmt(zh.mjAnkanButton, { tile: readMahjongTile(tile).text })))
+          }
+          for (let index = 0; index < kakanOptions.length; index += 1) {
+            const tile = kakanOptions[index]
+            actionNodes.push(h('button', {
+              key: 'kakan:' + index,
+              type: 'button',
+              className: 'dsh-card-lan-button dsh-card-lan-button-small',
+              disabled: busy || connectionBroken,
+              onClick: () => void props.kakanCall(tile),
+            }, fmt(zh.mjKakanButton, { tile: readMahjongTile(tile).text })))
+          }
         }
-        actionNodes.push(h('button', {
-          key: 'tsumo',
-          type: 'button',
-          className: 'dsh-card-lan-button',
-          disabled: busy || connectionBroken,
-          onClick: () => void props.tsumoWin(),
-        }, zh.mjTsumo))
       }
       if (role === 'host' && (phase === 'idle' || phase === 'result')) {
         actionNodes.push(h('button', {
@@ -3585,6 +3807,13 @@ window.__ModuleLoader__.load({
         sortDdzCards(asArray(tableRecord.myCards)).join(','),
         // Mahjong keeps the hand in `myHand` (tiles), so track it too.
         asArray(tableRecord.myHand).join(','),
+        // A new call window (new discard) invalidates old selections.
+        (() => {
+          const lastDiscardRecord = asObject(tableRecord.lastDiscard)
+          return lastDiscardRecord !== null
+            ? asString(lastDiscardRecord.node, '') + ':' + asString(lastDiscardRecord.tile, '')
+            : ''
+        })(),
       ].join('|')
       useEffect(() => {
         setSelectedIndexes([])
@@ -3802,6 +4031,39 @@ window.__ModuleLoader__.load({
         void act({ type: 'discard', tile })
       }
       const nukiTile = () => void act({ type: 'nuki', tile: 'N' })
+      // Mahjong milestone ② (PROTOCOL §7.20): calls, kans, furiten.
+      const mjLastDiscard = isMahjong ? asObject(table.lastDiscard) : null
+      const mjCallTile = () => {
+        const record = asObject(table.lastDiscard)
+        return record !== null ? asString(record.tile, '') : ''
+      }
+      const ronCall = () => void act({ type: 'ron' })
+      const ponCall = () => {
+        const tile = mjCallTile()
+        if (tile === '') return
+        void act({ type: 'pon', tiles: [tile, tile] })
+      }
+      const kanCall = () => {
+        const tile = mjCallTile()
+        if (tile === '') return
+        void act({ type: 'kan', tiles: [tile, tile, tile] })
+      }
+      const chiCall = (option) => {
+        const tiles = asArray(option).filter((tile) => typeof tile === 'string' && tile !== '')
+        if (tiles.length !== 2) return
+        void act({ type: 'chi', tiles })
+      }
+      const passCall = () => void act({ type: 'pass' })
+      const ankanCall = (tile) => {
+        const value = asString(tile, '')
+        if (value === '') return
+        void act({ type: 'ankan', tile: value })
+      }
+      const kakanCall = (tile) => {
+        const value = asString(tile, '')
+        if (value === '') return
+        void act({ type: 'kakan', tile: value })
+      }
       const tsumoWin = () => void act({ type: 'tsumo' })
 
       /** Card-game writes (PROTOCOL §7.3/§7.6/§7.12): bid / play / pass / start. */
@@ -4088,6 +4350,36 @@ window.__ModuleLoader__.load({
         if (discardsMap === null) return []
         return asArray(discardsMap[asString(slot.node, '')]).filter((tile) => typeof tile === 'string' && tile !== '')
       }
+      // Milestone ②: call window / melds / doras / furiten (PROTOCOL §7.20).
+      const mjDorasRaw = isMahjong
+        ? asArray(table.doras).filter((tile) => typeof tile === 'string' && tile !== '')
+        : []
+      const mjDoras = mjDorasRaw.length > 0
+        ? mjDorasRaw
+        : (isMahjong && asString(table.doraIndicator, '') !== ''
+          ? [asString(table.doraIndicator, '')]
+          : [])
+      const mjPendingRaw = isMahjong
+        ? asArray(table.pending).map((entry) => asObject(entry)).filter((entry) => entry !== null)
+        : []
+      const mjMyPending = mjPendingRaw.find((entry) => asString(entry.node, '') === myNode) || null
+      const mjChiOptions = mjMyPending !== null
+        ? asArray(mjMyPending.chiOptions).map((option) => {
+          const optionRecord = asObject(option)
+          const tiles = Array.isArray(option) ? option : asArray(optionRecord !== null ? optionRecord.tiles : [])
+          return tiles.filter((tile) => typeof tile === 'string' && tile !== '')
+        }).filter((tiles) => tiles.length === 2)
+        : []
+      const mjFuritenMap = isMahjong ? asObject(table.furiten) : null
+      const mjMyFuriten = mjFuritenMap !== null && mjFuritenMap[myNode] === true
+      const mjMustDiscard = isMahjong && table.mustDiscard === true
+      const mjMeldsMap = isMahjong ? asObject(table.melds) : null
+      const mahjongMeldsFor = (slot) => {
+        const direct = asArray(slot.melds)
+        if (direct.length > 0) return direct
+        if (mjMeldsMap !== null) return asArray(mjMeldsMap[asString(slot.node, '')])
+        return []
+      }
       const mahjongGame = isMahjong
         ? buildMahjongContent({
           game,
@@ -4105,6 +4397,13 @@ window.__ModuleLoader__.load({
           wall: Math.max(0, asNumber(table.wall, 0)),
           nuki: Math.max(0, asNumber(table.nuki, 0)),
           doraIndicator: asString(table.doraIndicator, ''),
+          doras: mjDoras,
+          pendingEntry: mjMyPending,
+          lastDiscard: mjLastDiscard,
+          chiOptions: mjChiOptions,
+          myFuriten: mjMyFuriten,
+          mustDiscard: mjMustDiscard,
+          meldsFor: mahjongMeldsFor,
           result: asString(table.result, ''),
           winnerNode: asString(table.winnerNode, asString(table.winner, '')),
           discardsFor: mahjongDiscardsFor,
@@ -4113,6 +4412,13 @@ window.__ModuleLoader__.load({
           discardSelected,
           nukiTile,
           tsumoWin,
+          ronCall,
+          ponCall,
+          kanCall,
+          chiCall,
+          passCall,
+          ankanCall,
+          kakanCall,
           busy,
           connectionBroken,
           turnRemainingMs,
@@ -4686,6 +4992,17 @@ window.__ModuleLoader__.load({
       'background:var(--dsw-alias-bg-layer-1,rgba(15,23,42,.35));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.2))}',
       '.dsh-card-lan-mj-revealline{display:flex;flex-wrap:wrap;gap:2px;align-items:center;font-size:12px}',
       '.dsh-card-lan-mj-revealline.is-winner{color:#4ade80}',
+      '.dsh-card-lan-mj-tile.is-back{background:repeating-linear-gradient(135deg,#3b5b8f 0 4px,#27436f 4px 8px);',
+      'color:transparent;box-shadow:0 2px 6px rgba(2,6,23,.35),inset 0 0 0 1px rgba(255,255,255,.18)}',
+      '.dsh-card-lan-mj-call{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;border-radius:8px;',
+      'background:rgba(77,107,254,.12);border:1px solid rgba(77,107,254,.4)}',
+      '.dsh-card-lan-mj-calltext{font-size:12px;font-weight:600;color:#c7d2fe}',
+      '.dsh-card-lan-mj-melds{display:flex;flex-wrap:wrap;gap:6px;align-items:center}',
+      '.dsh-card-lan-mj-meld{display:inline-flex;align-items:center;gap:2px;padding:2px 4px;border-radius:6px;',
+      'background:rgba(148,163,184,.08);border:1px solid rgba(148,163,184,.2)}',
+      '.dsh-card-lan-mj-meldlabel{font-size:10px;color:var(--dsw-alias-label-secondary,#94a3b8);margin-right:2px}',
+      '.dsh-card-lan-tag.is-mj-furiten{background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.45);',
+      'color:#f87171;font-weight:600}',
       '.dsh-card-lan-row-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
       '.dsh-card-lan-name{font-weight:600;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dsh-card-lan-hand{display:flex;align-items:center;gap:5px;flex-wrap:wrap;min-height:40px}',

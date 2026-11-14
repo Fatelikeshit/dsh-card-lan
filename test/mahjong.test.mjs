@@ -136,3 +136,106 @@ test('hands stay private in the snapshot', () => {
   assert.equal(watcher.myHand.length, 0)
   assert.equal(watcher.players.every((player) => player.hand === undefined), true)
 })
+
+function fillJunk() {
+  return ['1s', '1s', '2s', '2s', '3s', '3s', '4s', '4s', '5s', '5s', '6s', '6s', '7s']
+}
+
+function setup4(seed = 31) {
+  const state = createTable([
+    { node: 'node-a', nick: '甲' },
+    { node: 'node-b', nick: '乙' },
+    { node: 'node-c', nick: '丙' },
+    { node: 'node-d', nick: '丁' },
+  ], { mode: 'mahjong4' })
+  startRound(state, seeded(seed))
+  return state
+}
+
+test('a discard can be claimed with chi by the next player', () => {
+  const state = setup4(31)
+  state.turn = 'node-a'
+  state.players[0].hand = ['5m', ...fillJunk().slice(1)]
+  state.players[1].hand = ['4m', '6m', ...fillJunk().slice(2)]
+  state.players[2].hand = fillJunk()
+  state.players[3].hand = fillJunk()
+  assert.equal(applyAction(state, 'node-a', { type: 'discard', tile: '5m' }).ok, true)
+  assert.equal(state.phase, 'calling')
+  const pending = state.pending.find((entry) => entry.node === 'node-b')
+  assert.ok(pending && pending.allowed.includes('chi'))
+  assert.equal(applyAction(state, 'node-b', { type: 'chi', tiles: ['4m', '6m'] }).ok, true)
+  assert.equal(state.phase, 'playing')
+  assert.equal(state.turn, 'node-b')
+  assert.equal(state.mustDiscard, true)
+  assert.equal(state.players[1].melds.some((meld) => meld.type === 'chi'), true)
+  assert.equal(state.players[1].hand.length, 11)
+})
+
+test('a discard can be claimed with pon and resolved over chi', () => {
+  const state = setup4(33)
+  state.turn = 'node-a'
+  state.players[0].hand = ['5m', ...fillJunk().slice(1)]
+  state.players[1].hand = ['4m', '6m', ...fillJunk().slice(2)]
+  state.players[2].hand = ['5m', '5m', ...fillJunk().slice(2)]
+  state.players[3].hand = fillJunk()
+  assert.equal(applyAction(state, 'node-a', { type: 'discard', tile: '5m' }).ok, true)
+  assert.equal(state.phase, 'calling')
+  assert.ok(state.pending.some((entry) => entry.node === 'node-c' && entry.allowed.includes('pon')))
+  assert.equal(applyAction(state, 'node-b', { type: 'pass' }).ok, true)
+  assert.equal(applyAction(state, 'node-c', { type: 'pon', tiles: ['5m', '5m'] }).ok, true)
+  assert.equal(state.phase, 'playing')
+  assert.equal(state.turn, 'node-c')
+  assert.equal(state.mustDiscard, true)
+  assert.equal(state.players[2].melds.some((meld) => meld.type === 'pon'), true)
+})
+
+test('ron claims the discard and passing it marks temporary furiten', () => {
+  const winHand = ['1m', '2m', '3m', '4m', '5m', '6m', '7m', '8m', '9m', '1p', '2p', '3p', 'E']
+  const state = setup4(37)
+  state.turn = 'node-a'
+  state.players[0].hand = ['E', ...fillJunk().slice(1)]
+  state.players[1].hand = fillJunk()
+  state.players[2].hand = winHand.slice()
+  state.players[3].hand = fillJunk()
+  assert.equal(applyAction(state, 'node-a', { type: 'discard', tile: 'E' }).ok, true)
+  assert.equal(state.phase, 'calling')
+  const pending = state.pending.find((entry) => entry.node === 'node-c')
+  assert.ok(pending && pending.allowed.includes('ron'))
+  assert.equal(applyAction(state, 'node-c', { type: 'ron' }).ok, true)
+  assert.equal(state.phase, 'result')
+  assert.equal(state.result, 'ron')
+  assert.equal(state.winnerNode, 'node-c')
+
+  const second = setup4(37)
+  second.turn = 'node-a'
+  second.players[0].hand = ['E', ...fillJunk().slice(1)]
+  second.players[1].hand = fillJunk()
+  second.players[2].hand = winHand.slice()
+  second.players[3].hand = fillJunk()
+  applyAction(second, 'node-a', { type: 'discard', tile: 'E' })
+  assert.equal(applyAction(second, 'node-c', { type: 'pass' }).ok, true)
+  const view = snapshot(second, 'node-c', { role: 'player', hostNode: 'node-a', staleMs: 0, turnRemainingMs: 30000 })
+  assert.equal(view.furiten['node-c'], true)
+})
+
+test('ankan and kakan draw from the dead wall and reveal an extra dora', () => {
+  const state = setup4(41)
+  state.turn = 'node-a'
+  state.players[0].hand = ['1m', '1m', '1m', '1m', ...fillJunk().slice(4)]
+  state.deadDrawIndex = 4
+  const dorasBefore = state.doras.length
+  assert.equal(applyAction(state, 'node-a', { type: 'ankan', tile: '1m' }).ok, true)
+  assert.equal(state.players[0].melds.some((meld) => meld.type === 'ankan'), true)
+  assert.equal(state.mustDiscard, true)
+  assert.equal(state.doras.length, dorasBefore + 1)
+
+  const added = setup4(43)
+  added.turn = 'node-a'
+  added.players[0].melds = [{ type: 'pon', tiles: ['2m', '2m', '2m'], from: 'node-b' }]
+  added.players[0].hand = ['2m', ...fillJunk().slice(1)]
+  added.deadDrawIndex = 4
+  const before = added.doras.length
+  assert.equal(applyAction(added, 'node-a', { type: 'kakan', tile: '2m' }).ok, true)
+  assert.equal(added.players[0].melds.some((meld) => meld.type === 'kakan'), true)
+  assert.equal(added.doras.length, before + 1)
+})
