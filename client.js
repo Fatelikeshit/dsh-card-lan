@@ -99,8 +99,8 @@ window.__ModuleLoader__.load({
     /** Pao De Kuai phases (PROTOCOL §7.6): no bidding, no landlord. */
     const PDK_PHASES = { idle: '等待开始', playing: '出牌中', result: '本局结束' }
 
-    /** Guandan phases (PROTOCOL §7.12): 4 seats, no bidding. */
-    const GD_PHASES = { idle: '等待开始', playing: '出牌中', result: '本局结束' }
+    /** Guandan phases (PROTOCOL §7.12): v10 adds the tribute exchange phase. */
+    const GD_PHASES = { idle: '等待开始', tribute: '进贡还贡', playing: '出牌中', result: '本局结束' }
 
     /** Guandan finishing labels, first out → last out. */
     const GD_ORDER_LABELS = ['头游', '二游', '三游', '末游']
@@ -412,6 +412,17 @@ window.__ModuleLoader__.load({
       gdRoundOver: '本局结束',
       gdOrdersTitle: '名次',
       noPlayersGuandan: '人数不足：掼蛋需要 4 人',
+      gdTributeTitle: '进贡 / 还贡',
+      gdTributeSkipped: '抗贡',
+      gdTributeGift: '贡 {card}',
+      gdTributeReturned: '还 {card}',
+      gdTributePending: '待还贡',
+      gdTributeDone: '已还贡',
+      gdTributePrompt: '请选一张 ≤10 的牌还贡',
+      gdTributeSelectHint: '只能选 ≤10 的牌或红桃级牌还贡',
+      gdTributeSubmit: '还贡',
+      gdTributeWaiting: '等待 {name} 还贡…',
+      gdTributeWaitAll: '等待进贡 / 还贡完成…',
       zjhTitle: '炸金花 · 第 {n} 局',
       zjhTitleIdle: '炸金花 · 未开局',
       zjhCapsule: '炸金花 · 第 {n} 局',
@@ -441,6 +452,7 @@ window.__ModuleLoader__.load({
       zjhWait: '等待 {name} 行动…',
       zjhHandsTitle: '所有人手牌',
       zjhUnseen: '未亮牌',
+      zjhLabel235: '235（吃豹子）',
       noPlayersZjh: '人数不足：炸金花需要 2 人',
       txTitle: '德州扑克 · 第 {n} 局',
       txTitleIdle: '德州扑克 · 未开局',
@@ -465,6 +477,13 @@ window.__ModuleLoader__.load({
       txCall: '跟注 {n}',
       txAllin: '全下 {n}',
       txRaiseTo: '加注到 {n}',
+      txRaise: '加注',
+      txRaiseTarget: '加注到 {n}（本街投入）',
+      txRaiseAmount: '加注金额',
+      txRaiseAmountNum: '加注金额（数字）',
+      txMinRaise: '最小加注',
+      txAllInBtn: '全下',
+      txCancelRaise: '取消',
       txWin: '你赢了 +{n}',
       txLose: '你输了',
       txWinner: '赢家：{name}',
@@ -700,6 +719,25 @@ window.__ModuleLoader__.load({
       return round > 0 ? fmt(zh.capsule, { n: round }) : zh.capsuleIdle
     }
 
+    /**
+     * True when the cards form Zhajinhua's special 235 (2/3/5, all different
+     * suits) — PROTOCOL §7.14 v10: it beats any 豹子.
+     */
+    function isZjh235(cards) {
+      const list = asArray(cards).filter((card) => typeof card === 'string' && card !== '')
+      if (list.length !== 3) return false
+      const ranks = []
+      const suits = []
+      for (const card of list) {
+        const raw = card.trim().toUpperCase()
+        if (raw.length < 2) return false
+        ranks.push(raw.slice(0, -1))
+        suits.push(raw.slice(-1))
+      }
+      if (ranks.slice().sort().join(',') !== '2,3,5') return false
+      return new Set(suits).size === 3
+    }
+
     /** Team index from an untrusted value (0/1) or null. */
     function teamIndexOf(value, fallback) {
       if (value !== null && value !== undefined && value !== '' && typeof value !== 'boolean') {
@@ -716,6 +754,22 @@ window.__ModuleLoader__.load({
       const levelRank = typeof level === 'string' ? level.trim().toUpperCase() : ''
       if (rank.length < 2 || levelRank === '') return false
       return rank.slice(-1) === 'H' && rank.slice(0, -1) === levelRank
+    }
+
+    /**
+     * True when the card may be returned as tribute (PROTOCOL §7.12): natural
+     * point ≤ 10 (2–10). The host engine rejects anything else with `bad-cards`.
+     */
+    function isGuandanTributeCard(card, level) {
+      const raw = typeof card === 'string' ? card.trim().toUpperCase() : ''
+      if (raw === '' || raw === 'BJ' || raw === 'RJ') return false
+      const rank = raw.slice(0, -1)
+      if (rank === '10') return true
+      if (rank.length === 1) {
+        const numeric = Number(rank)
+        return Number.isInteger(numeric) && numeric >= 2 && numeric <= 9
+      }
+      return false
     }
 
     /** Rank order of one Dou Dizhu card code (unknown codes sort first). */
@@ -1051,17 +1105,26 @@ window.__ModuleLoader__.load({
 
     /**
      * One hand card; `onToggle` (when given) makes it selectable. `badge`
-     * renders a tiny corner marker — used for Guandan's 「配」 wild card.
+     * renders a tiny corner marker (Guandan's 「配」 wild card); `disabledHint`
+     * marks a non-selectable card (Guandan tribute return, rank > 10).
      */
-    function ddzCardNode(card, key, selected, onToggle, badge) {
+    function ddzCardNode(card, key, selected, onToggle, badge, disabledHint) {
       const face = readCard(card)
       const props = {
         key,
         className: 'dsh-card-lan-card dsh-card-lan-ddz-card'
           + (face.red ? ' is-red' : '')
-          + (selected === true ? ' is-selected' : ''),
-        title: face.text,
+          + (selected === true ? ' is-selected' : '')
+          + (disabledHint !== undefined && disabledHint !== null && disabledHint !== ''
+            ? ' is-disabled'
+            : ''),
+        title: disabledHint !== undefined && disabledHint !== null && disabledHint !== ''
+          ? disabledHint
+          : face.text,
         'aria-label': face.text,
+      }
+      if (disabledHint !== undefined && disabledHint !== null && disabledHint !== '') {
+        props['aria-disabled'] = true
       }
       if (onToggle !== null && onToggle !== undefined) {
         props.role = 'button'
@@ -1117,6 +1180,12 @@ window.__ModuleLoader__.load({
       const activeTurn = !isSpectator && turnNode !== '' && turnNode === myNode
       const gdMyTeam = gd !== null ? gd.myTeam : null
       const mySeatIndex = isGd ? players.indexOf(me) : -1
+      // Guandan v10 tribute exchange (PROTOCOL §7.12): pendingReturn asks one
+      // receiver to pick a rank-≤10 card back.
+      const gdTribute = isGd ? asArray(props.tribute) : []
+      const pendingReturnNode = isGd ? asString(props.pendingReturn, '') : ''
+      const tributeReturnMode = isGd && phase === 'tribute' && !isSpectator
+        && myNode !== '' && pendingReturnNode === myNode
 
       const playerByNode = (node) => {
         const target = asString(node, '')
@@ -1159,6 +1228,14 @@ window.__ModuleLoader__.load({
         hint = zh.spectatorHint
       } else if (phase === 'idle') {
         hint = role === 'host' ? zh.ddzIdleHost : zh.ddzWaitStart
+      } else if (phase === 'tribute') {
+        if (tributeReturnMode) {
+          hint = zh.gdTributePrompt
+        } else {
+          const pendingPlayer = playerByNode(pendingReturnNode)
+          const pendingNick = pendingPlayer !== undefined ? asString(pendingPlayer.nick, '') : ''
+          hint = pendingNick !== '' ? fmt(zh.gdTributeWaiting, { name: pendingNick }) : zh.gdTributeWaitAll
+        }
       } else if (phase === 'bidding') {
         if (activeTurn) hint = zh.ddzYourBid
         else hint = props.turnNick !== '' ? fmt(zh.ddzWaitBid, { name: props.turnNick }) : zh.ddzWaitHostState
@@ -1170,6 +1247,55 @@ window.__ModuleLoader__.load({
       }
 
       const bodyNodes = []
+
+      /* ---------- Guandan tribute exchange (PROTOCOL §7.12, v10) ---------- */
+      if (isGd && phase === 'tribute' && gdTribute.length > 0) {
+        const tributeLines = gdTribute.map((entry, index) => {
+          const fromPlayer = playerByNode(entry.from)
+          const toPlayer = playerByNode(entry.to)
+          const fromNick = fromPlayer !== undefined ? asString(fromPlayer.nick, '玩家') : '玩家'
+          const toNick = toPlayer !== undefined ? asString(toPlayer.nick, '玩家') : '玩家'
+          const skipped = entry.skipped === true
+          const giftCard = asString(entry.card, '')
+          // `returned` is the return card once the receiver picked one (the host
+          // mirrors the tribute card into `gift`, so it must not be used here).
+          const returnCard = asString(entry.returned, '')
+          const returnDone = returnCard !== '' || entry.returned === true
+          const isMyPending = !skipped && !returnDone && !isSpectator
+            && myNode !== '' && asString(entry.to, '') === myNode
+          const tags = []
+          if (skipped) {
+            tags.push(h('span', { key: 'skip', className: 'dsh-card-lan-tag is-tribute-skip' }, zh.gdTributeSkipped))
+          } else {
+            if (giftCard !== '') {
+              tags.push(h('span', { key: 'gift', className: 'dsh-card-lan-tag is-tribute-gift' },
+                fmt(zh.gdTributeGift, { card: readCard(giftCard).text })))
+            }
+            if (returnCard !== '') {
+              tags.push(h('span', { key: 'returned', className: 'dsh-card-lan-tag is-tribute-return' },
+                fmt(zh.gdTributeReturned, { card: readCard(returnCard).text })))
+            } else if (returnDone) {
+              tags.push(h('span', { key: 'done', className: 'dsh-card-lan-tag' }, zh.gdTributeDone))
+            } else {
+              tags.push(h('span', {
+                key: 'pending',
+                className: 'dsh-card-lan-tag is-tribute-pending' + (isMyPending ? ' is-turn' : ''),
+              }, zh.gdTributePending))
+            }
+          }
+          return h('div', {
+            key: 'tribute:' + index,
+            className: 'dsh-card-lan-gd-tributeline' + (isMyPending ? ' is-my-pending' : ''),
+          }, [
+            h('span', { key: 'names', className: 'dsh-card-lan-gd-tributenames' }, fromNick + ' → ' + toNick),
+            ...tags,
+          ])
+        })
+        bodyNodes.push(h('div', { key: 'tribute', className: 'dsh-card-lan-gd-tribute' }, [
+          h('div', { key: 'title', className: 'dsh-card-lan-label' }, zh.gdTributeTitle),
+          ...tributeLines,
+        ]))
+      }
 
       /* ---------- other seats: role, remaining cards, turn, out ---------- */
       const others = players.filter((slot) => slot !== me)
@@ -1293,6 +1419,7 @@ window.__ModuleLoader__.load({
       /* ---------- my hand (players only; spectators never see hands) ---------- */
       if (!isSpectator && me !== undefined && phase !== 'idle') {
         const canSelect = phase === 'playing' && !busy && !connectionBroken
+        const tributeSelectable = tributeReturnMode && !busy && !connectionBroken
         const handHead = [
           h('span', { key: 'label', className: 'dsh-card-lan-label' }, fmt(zh.ddzMyHand, { n: myCards.length })),
           selectedIndexes.length > 0
@@ -1313,13 +1440,27 @@ window.__ModuleLoader__.load({
             ? h('div', {
               key: 'cards',
               className: 'dsh-card-lan-ddz-hand' + (isGd ? ' is-guandan' : ''),
-            }, myCards.map((card, index) => ddzCardNode(
-              card,
-              'hand:' + index + ':' + card,
-              selectedIndexes.indexOf(index) !== -1,
-              canSelect ? () => props.toggleCard(index) : null,
-              isGd && gd !== null && isGuandanWild(card, gd.level) ? zh.gdWild : '',
-            )))
+            }, myCards.map((card, index) => {
+              const wild = isGd && gd !== null && isGuandanWild(card, gd.level)
+              if (tributeReturnMode) {
+                const allowed = isGd && gd !== null && isGuandanTributeCard(card, gd.level)
+                return ddzCardNode(
+                  card,
+                  'hand:' + index + ':' + card,
+                  selectedIndexes.indexOf(index) !== -1,
+                  tributeSelectable && allowed ? () => props.toggleCard(index) : null,
+                  wild ? zh.gdWild : '',
+                  allowed ? '' : zh.gdTributeSelectHint,
+                )
+              }
+              return ddzCardNode(
+                card,
+                'hand:' + index + ':' + card,
+                selectedIndexes.indexOf(index) !== -1,
+                canSelect ? () => props.toggleCard(index) : null,
+                wild ? zh.gdWild : '',
+              )
+            }))
             : h('span', { key: 'empty', className: 'dsh-card-lan-empty' }, zh.ddzOut),
         ]))
       }
@@ -1377,6 +1518,18 @@ window.__ModuleLoader__.load({
 
       /* ---------- buttons ---------- */
       const actionNodes = []
+      if (tributeReturnMode) {
+        const selectedTributeCard = selectedIndexes.length === 1 && myCards[selectedIndexes[0]] !== undefined
+          ? myCards[selectedIndexes[0]]
+          : ''
+        actionNodes.push(h('button', {
+          key: 'tributeReturn',
+          type: 'button',
+          className: 'dsh-card-lan-button dsh-card-lan-button-primary',
+          disabled: busy || connectionBroken || selectedTributeCard === '',
+          onClick: () => void props.submitTribute(selectedTributeCard),
+        }, zh.gdTributeSubmit))
+      }
       if (isDdz && phase === 'bidding' && activeTurn) {
         actionNodes.push(h('button', {
           key: 'bid',
@@ -1543,6 +1696,9 @@ window.__ModuleLoader__.load({
             h('span', { key: 'chips', className: 'dsh-card-lan-tag' }, fmt(zh.zjhChips, { n: myChips })),
             h('span', { key: 'bet', className: 'dsh-card-lan-tag' }, fmt(zh.zjhBet, { n: myBet })),
             meSeen ? h('span', { key: 'seen', className: 'dsh-card-lan-tag is-seen' }, zh.zjhSeen) : null,
+            phase !== 'result' && meSeen && isZjh235(myCards)
+              ? h('span', { key: 'special', className: 'dsh-card-lan-tag is-zjh-235' }, zh.zjhLabel235)
+              : null,
             activeTurn ? h('span', { key: 'turn', className: 'dsh-card-lan-tag is-turn' }, zh.acting) : null,
           ]),
           h('div', { key: 'cards', className: 'dsh-card-lan-hand dsh-card-lan-zjh-hand' }, myCardNodes),
@@ -1579,12 +1735,20 @@ window.__ModuleLoader__.load({
           const lineClass = 'dsh-card-lan-zjh-handline'
             + (won ? ' is-winner' : '')
             + (folded ? ' is-out' : '')
+          const engineLabel = asString(slot.label, asString(slot.handLabel, ''))
+          const special235 = isZjh235(cards) || engineLabel.indexOf('235') !== -1
+          const handTag = special235
+            ? h('span', { key: 'special', className: 'dsh-card-lan-tag is-zjh-235' }, zh.zjhLabel235)
+            : (engineLabel !== ''
+              ? h('span', { key: 'label', className: 'dsh-card-lan-tag is-hand-label' }, engineLabel)
+              : null)
           const cardNodes = cards.length > 0
             ? cards.map((card, cardIndex) => h(CardChip, { key: 'c' + cardIndex, card }))
             : [h('span', { key: 'empty', className: 'dsh-card-lan-empty' }, zh.zjhUnseen)]
           handLines.push(h('div', { key: 'hand:' + index + ':' + node, className: lineClass }, [
             h('span', { key: 'nick', className: 'dsh-card-lan-zjh-handnick' }, nick),
             h('span', { key: 'cards', className: 'dsh-card-lan-hand' }, cardNodes),
+            handTag,
             won ? h('span', { key: 'win', className: 'dsh-card-lan-tag is-result-win' }, zh.zjhWinTag) : null,
           ]))
         }
@@ -1914,22 +2078,78 @@ window.__ModuleLoader__.load({
               onClick: () => void props.callBet(),
             }, fmt(zh.txCall, { n: callGap })))
           }
-          if (raiseGap >= meChips) {
-            actionNodes.push(h('button', {
-              key: 'raise',
-              type: 'button',
-              className: 'dsh-card-lan-button',
-              disabled: busy || connectionBroken,
-              onClick: () => void props.raiseBet(),
-            }, fmt(zh.txAllin, { n: meChips })))
-          } else {
-            actionNodes.push(h('button', {
-              key: 'raise',
-              type: 'button',
-              className: 'dsh-card-lan-button',
-              disabled: busy || connectionBroken,
-              onClick: () => void props.raiseBet(),
-            }, fmt(zh.txRaiseTo, { n: raiseTo })))
+          actionNodes.push(h('button', {
+            key: 'raiseToggle',
+            type: 'button',
+            className: 'dsh-card-lan-button' + (props.raiseOpen === true ? ' is-active' : ''),
+            disabled: busy || connectionBroken,
+            'aria-expanded': props.raiseOpen === true,
+            onClick: () => props.toggleRaise(),
+          }, zh.txRaise))
+          if (props.raiseOpen === true) {
+            const raiseMin = Math.max(0, asNumber(props.raiseMin, raiseTo))
+            const allInTarget = Math.max(0, asNumber(props.raiseMax, meStreetBet + meChips))
+            const raiseMax = Math.max(raiseMin, allInTarget)
+            const targetValue = Math.min(raiseMax, Math.max(raiseMin, asNumber(props.raiseTarget, raiseMin)))
+            const targetIsAllIn = targetValue >= raiseMax
+            actionNodes.push(h('div', { key: 'raisePanel', className: 'dsh-card-lan-tx-raise' }, [
+              h('div', { key: 'label', className: 'dsh-card-lan-label' },
+                fmt(zh.txRaiseTarget, { n: targetValue })),
+              h('input', {
+                key: 'range',
+                className: 'dsh-card-lan-tx-range',
+                type: 'range',
+                min: raiseMin,
+                max: raiseMax,
+                step: 10,
+                value: String(targetValue),
+                'aria-label': zh.txRaiseAmount,
+                disabled: busy || connectionBroken,
+                onChange: (event) => props.setRaiseTarget(Number(event.target.value)),
+              }),
+              h('div', { key: 'row', className: 'dsh-card-lan-actions' }, [
+                h('input', {
+                  key: 'number',
+                  className: 'dsh-card-lan-input dsh-card-lan-input-narrow',
+                  type: 'number',
+                  min: raiseMin,
+                  max: raiseMax,
+                  step: 10,
+                  value: String(targetValue),
+                  'aria-label': zh.txRaiseAmountNum,
+                  disabled: busy || connectionBroken,
+                  onChange: (event) => props.setRaiseTarget(Number(event.target.value)),
+                }),
+                h('button', {
+                  key: 'minRaise',
+                  type: 'button',
+                  className: 'dsh-card-lan-button dsh-card-lan-button-small',
+                  disabled: busy || connectionBroken,
+                  onClick: () => props.setRaiseTarget(raiseMin),
+                }, zh.txMinRaise),
+                h('button', {
+                  key: 'allInRaise',
+                  type: 'button',
+                  className: 'dsh-card-lan-button dsh-card-lan-button-small',
+                  disabled: busy || connectionBroken,
+                  onClick: () => props.setRaiseTarget(raiseMax),
+                }, zh.txAllInBtn),
+                h('button', {
+                  key: 'confirmRaise',
+                  type: 'button',
+                  className: 'dsh-card-lan-button dsh-card-lan-button-primary dsh-card-lan-button-small',
+                  disabled: busy || connectionBroken,
+                  onClick: () => props.submitRaise(targetValue),
+                }, targetIsAllIn ? fmt(zh.txAllin, { n: targetValue }) : fmt(zh.txRaiseTo, { n: targetValue })),
+                h('button', {
+                  key: 'cancelRaise',
+                  type: 'button',
+                  className: 'dsh-card-lan-button dsh-card-lan-button-small',
+                  disabled: busy || connectionBroken,
+                  onClick: () => props.toggleRaise(),
+                }, zh.txCancelRaise),
+              ]),
+            ]))
           }
         }
       }
@@ -3013,6 +3233,8 @@ window.__ModuleLoader__.load({
       const dragState = useRef(null)
       const saveTimer = useRef(null)
       const [selectedIndexes, setSelectedIndexes] = useState([])
+      const [raiseOpen, setRaiseOpen] = useState(false)
+      const [raiseTarget, setRaiseTarget] = useState(null)
       const [showSettings, setShowSettings] = useState(false)
       const settingsTimer = useRef(null)
       // A drag that ends over the capsule must not also expand it.
@@ -3030,6 +3252,8 @@ window.__ModuleLoader__.load({
       ].join('|')
       useEffect(() => {
         setSelectedIndexes([])
+        setRaiseOpen(false)
+        setRaiseTarget(null)
       }, [boardKey])
 
       const configRecord = data !== null ? asObject(data.config) : null
@@ -3219,8 +3443,20 @@ window.__ModuleLoader__.load({
       /** Texas Hold'em writes (PROTOCOL §7.16): check also exists. */
       const checkBet = () => act({ type: 'check' })
 
+      /** Guandan tribute-return write (PROTOCOL §7.12, v10). */
+      const submitTribute = (card) => {
+        const value = asString(card, '')
+        if (value === '') return
+        void act({ type: 'tribute-return', card: value })
+      }
+
       /** Card-game writes (PROTOCOL §7.3/§7.6/§7.12): bid / play / pass / start. */
       const toggleCard = (index) => {
+        // Guandan tribute returns exactly one card, so replace the selection.
+        if (isGuandan && phase === 'tribute') {
+          setSelectedIndexes([index])
+          return
+        }
         setSelectedIndexes((current) => (current.indexOf(index) === -1
           ? current.concat([index])
           : current.filter((item) => item !== index)))
@@ -3342,6 +3578,9 @@ window.__ModuleLoader__.load({
         }
         return ''
       })()
+      // Guandan v10 tribute fields (PROTOCOL §7.12).
+      const gdTribute = isGuandan ? asArray(table.tribute) : []
+      const gdPendingReturn = isGuandan ? asString(table.pendingReturn, '') : ''
 
       const cardGame = isCardGame
         ? buildCardGameContent({
@@ -3361,6 +3600,9 @@ window.__ModuleLoader__.load({
           toggleCard,
           landlordPlayer,
           guandan: guandanInfo,
+          tribute: gdTribute,
+          pendingReturn: gdPendingReturn,
+          submitTribute,
           myScore,
           busy,
           connectionBroken,
@@ -3409,6 +3651,36 @@ window.__ModuleLoader__.load({
       const txCommunity = isTexas
         ? (txCommunityRaw.length > 0 ? txCommunityRaw : asArray(table.board))
         : []
+      // v10 raise controls: range from the minimum raise (currentBet + max(20,
+      // last raise increment)) to the player's all-in street total.
+      const txRaiseInfo = (() => {
+        if (!isTexas) return null
+        const txMe = players.find((slot) => slot.self === true)
+        const chips = txMe !== undefined ? Math.max(0, asNumber(txMe.chips, 0)) : 0
+        const streetBet = txMe !== undefined ? Math.max(0, asNumber(txMe.bet, 0)) : 0
+        const bet = Math.max(0, asNumber(table.currentBet, 0))
+        const lastDelta = Math.max(TX_RAISE_STEP,
+          Math.max(0, asNumber(table.lastRaise, Math.max(0, asNumber(table.raiseSize, 0)))))
+        const allIn = streetBet + chips
+        const minTarget = Math.min(allIn, bet + lastDelta)
+        return { minTarget: Math.max(0, minTarget), allIn: Math.max(0, allIn) }
+      })()
+      const toggleRaise = () => setRaiseOpen((value) => !value)
+      const changeRaiseTarget = (value) => {
+        if (txRaiseInfo === null) return
+        const numeric = Number(value)
+        if (!Number.isFinite(numeric)) return
+        setRaiseTarget(Math.min(txRaiseInfo.allIn, Math.max(txRaiseInfo.minTarget, Math.round(numeric))))
+      }
+      const submitRaise = (value) => {
+        if (txRaiseInfo === null) return
+        const numeric = Number(value)
+        const amount = Math.min(txRaiseInfo.allIn, Math.max(txRaiseInfo.minTarget,
+          Number.isFinite(numeric) ? Math.round(numeric) : txRaiseInfo.minTarget))
+        setRaiseOpen(false)
+        setRaiseTarget(null)
+        void act({ type: 'raise', amount })
+      }
       const texasGame = isTexas
         ? buildTexasContent({
           role,
@@ -3426,6 +3698,13 @@ window.__ModuleLoader__.load({
           dealerNode: asString(table.dealer, ''),
           winnerNodes: asArray(table.winnerNodes),
           pots: asArray(table.pots),
+          raiseOpen,
+          raiseMin: txRaiseInfo !== null ? txRaiseInfo.minTarget : 0,
+          raiseMax: txRaiseInfo !== null ? txRaiseInfo.allIn : 0,
+          raiseTarget,
+          toggleRaise,
+          setRaiseTarget: changeRaiseTarget,
+          submitRaise,
           busy,
           connectionBroken,
           turnRemainingMs,
@@ -3948,6 +4227,25 @@ window.__ModuleLoader__.load({
       '.dsh-card-lan-tx-winners{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border-radius:8px;',
       'background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.3)}',
       '.dsh-card-lan-tx-winner{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;color:#6ee7b7}',
+      '.dsh-card-lan-tx-raise{display:flex;flex-direction:column;gap:6px;flex:1 1 100%;padding:8px 10px;border-radius:8px;',
+      'background:var(--dsw-alias-bg-layer-1,rgba(15,23,42,.5));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.3))}',
+      '.dsh-card-lan-tx-range{width:100%;accent-color:var(--dsw-alias-brand-primary,#4d6bfe);cursor:pointer}',
+      '.dsh-card-lan-button.is-active{border-color:var(--dsw-alias-brand-primary,#4d6bfe);',
+      'background:rgba(77,107,254,.18);color:#c7d2fe}',
+      '.dsh-card-lan-gd-tribute{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border-radius:10px;',
+      'background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.28)}',
+      '.dsh-card-lan-gd-tributeline{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:2px 0;font-size:12px}',
+      '.dsh-card-lan-gd-tributeline.is-my-pending{border-radius:6px;background:rgba(77,107,254,.14);padding:2px 6px}',
+      '.dsh-card-lan-gd-tributenames{color:var(--dsw-alias-label-secondary,#94a3b8);min-width:96px}',
+      '.dsh-card-lan-tag.is-tribute-gift{background:rgba(251,146,60,.16);color:#fb923c}',
+      '.dsh-card-lan-tag.is-tribute-return{background:rgba(52,211,153,.14);color:#34d399}',
+      '.dsh-card-lan-tag.is-tribute-pending{background:rgba(245,158,11,.14);color:#fbbf24}',
+      '.dsh-card-lan-tag.is-tribute-skip{background:rgba(148,163,184,.16);color:#cbd5e1}',
+      '.dsh-card-lan-ddz-card.is-disabled{opacity:.4;cursor:not-allowed;filter:grayscale(.5)}',
+      '.dsh-card-lan-ddz-card.is-disabled:hover{transform:none}',
+      '.dsh-card-lan-tag.is-zjh-235{background:rgba(250,204,21,.2);border-color:rgba(250,204,21,.45);',
+      'color:#facc15;font-weight:700}',
+      '.dsh-card-lan-tag.is-hand-label{background:rgba(148,163,184,.14);color:#cbd5e1}',
       '.dsh-card-lan-row-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
       '.dsh-card-lan-name{font-weight:600;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dsh-card-lan-hand{display:flex;align-items:center;gap:5px;flex-wrap:wrap;min-height:40px}',

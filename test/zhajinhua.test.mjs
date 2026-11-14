@@ -166,3 +166,13 @@ test('botAction can drive a full hand and timeout folds', () => {
 
 
 
+
+test('special 235 beats leopards but loses to ordinary hands', () => {
+  const special = classify3(['2S', '3D', '5H'])
+  assert.equal(special.special, true)
+  assert.ok(compareHands(['2S', '3D', '5H'], ['AS', 'AD', 'AH']) > 0)
+  assert.ok(compareHands(['2S', '3D', '5H'], ['AS', 'AD', 'KH']) < 0)
+  assert.equal(compareHands(['2S', '3D', '5H'], ['2D', '3S', '5C']), 0)
+  assert.notEqual(classify3(['2S', '3S', '5S']).special, true)
+})
+

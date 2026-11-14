@@ -145,3 +145,41 @@ test('snapshot keeps hands private and exposes level state', () => {
   assert.equal(watcher.team, null)
   assert.equal(watcher.players.every((player) => player.self === false), true)
 })
+
+test('second round starts with tribute exchanges and the payer leads', () => {
+  const state = createTable(seats())
+  const rng = () => 0.42
+  startRound(state, rng)
+  let guard = 0
+  while (state.phase !== 'result' && guard < 4000) {
+    guard += 1
+    const node = state.turn
+    const action = botAction(state, node) ?? onTimeout(state, node)
+    assert.equal(applyAction(state, node, action).ok, true)
+  }
+  assert.equal(state.phase, 'result')
+
+  startRound(state, rng)
+  assert.equal(state.phase, 'tribute')
+  const meta = { role: 'player', hostNode: 'node-a', staleMs: 0, turnRemainingMs: 30000, scores: state.scores }
+  let view = snapshot(state, 'node-a', meta)
+  assert.ok(Array.isArray(view.tribute) && view.tribute.length >= 1)
+  assert.ok(view.tribute.every((lane) => typeof lane.card === 'string' && lane.card.length >= 2))
+
+  let returns = 0
+  while (view.pendingReturn !== null) {
+    const node = view.pendingReturn
+    const player = state.players.find((entry) => entry.node === node)
+    const low = player.hand.find((card) => ['2', '3', '4', '5', '6', '7', '8', '9', '10'].includes(card.slice(0, -1)))
+    assert.ok(low, 'a receiver must hold a card <= 10')
+    const result = applyAction(state, node, { type: 'tribute-return', card: low })
+    assert.equal(result.ok, true, JSON.stringify(result))
+    returns += 1
+    view = snapshot(state, 'node-a', meta)
+  }
+  assert.equal(state.phase, 'playing')
+  assert.ok(returns >= 1)
+  for (const player of state.players) assert.equal(player.hand.length, 27)
+  const payers = view.tribute.filter((lane) => lane.skipped !== true).map((lane) => lane.from)
+  assert.ok(payers.includes(state.turn), 'a tribute payer must lead the round')
+})

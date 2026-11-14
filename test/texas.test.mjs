@@ -135,3 +135,28 @@ test('snapshot keeps hole cards private until showdown', () => {
 })
 
 
+
+test('raise accepts a free amount with min-raise validation', () => {
+  const state = createTable(seats(2))
+  startRound(state, seeded(3))
+  const first = state.turn
+  const tooSmall = applyAction(state, first, { type: 'raise', amount: 30 })
+  assert.equal(tooSmall.ok, false)
+  assert.equal(tooSmall.error, 'bad-raise')
+  const raised = applyAction(state, first, { type: 'raise', amount: 60 })
+  assert.equal(raised.ok, true)
+  assert.equal(state.currentBet, 60)
+  assert.ok(state.lastRaiseDelta >= 40)
+})
+
+test('oversized raise clamps to an all-in', () => {
+  const state = createTable(seats(2))
+  state.players[0].chips = 100
+  startRound(state, seeded(7))
+  const first = state.turn
+  const result = applyAction(state, first, { type: 'raise', amount: 500 })
+  assert.equal(result.ok, true)
+  const player = state.players.find((entry) => entry.node === first)
+  assert.equal(player.chips, 0)
+  assert.equal(player.status, 'allin')
+})
