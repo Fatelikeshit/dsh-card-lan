@@ -40,6 +40,13 @@ import {
   newTable as bjNewTable,
   startRound as bjStartRound,
 } from '../lib/engine.js'
+import {
+  applyAction as applyMj,
+  botAction as mjBotAction,
+  createTable as mjCreateTable,
+  onTimeout as mjOnTimeout,
+  startRound as mjStartRound,
+} from '../lib/games/mahjong.js'
 
 /** Deterministic rng (mulberry32). */
 function seeded(seed) {
@@ -223,4 +230,55 @@ test('blackjack bots play a whole round to settlement', () => {
   for (const player of table.players) {
     assert.ok(['stand', 'bust', 'blackjack'].includes(player.status))
   }
+})
+
+function driveMahjongBots(state, limit = 6000) {
+  let guard = 0
+  while (state.phase !== 'result' && guard < limit) {
+    guard += 1
+    if (state.phase === 'calling') {
+      const pending = Array.isArray(state.pending) ? state.pending : []
+      assert.ok(pending.length > 0, 'calling must expose pending players')
+      let acted = false
+      for (const entry of pending) {
+        const action = mjBotAction(state, entry.node)
+        assert.ok(action !== null, 'bot must answer a call window')
+        const result = applyMj(state, entry.node, action)
+        assert.equal(result.ok, true, JSON.stringify(result) + ' ' + JSON.stringify(action))
+        acted = true
+      }
+      assert.equal(acted, true)
+      continue
+    }
+    const node = state.turn
+    assert.ok(node, 'a turn must exist')
+    const action = mjBotAction(state, node)
+    assert.ok(action !== null, 'bot must find a move')
+    const result = applyMj(state, node, action)
+    assert.equal(result.ok, true, JSON.stringify(result) + ' ' + JSON.stringify(action))
+  }
+  assert.equal(state.phase, 'result')
+}
+
+test('mahjong bots play a full four-player game', () => {
+  const state = mjCreateTable([
+    { node: 'node-a', nick: '机器人1' },
+    { node: 'node-b', nick: '机器人2' },
+    { node: 'node-c', nick: '机器人3' },
+    { node: 'node-d', nick: '机器人4' },
+  ], { mode: 'mahjong4' })
+  assert.equal(mjStartRound(state, seeded(11)).ok, true)
+  driveMahjongBots(state)
+  assert.equal(state.players.reduce((sum, player) => sum + (state.points[player.node] ?? 0), 0), 100000)
+})
+
+test('mahjong bots handle the three-player mode with north peeling', () => {
+  const state = mjCreateTable([
+    { node: 'node-a', nick: '机器人1' },
+    { node: 'node-b', nick: '机器人2' },
+    { node: 'node-c', nick: '机器人3' },
+  ], { mode: 'mahjong3' })
+  assert.equal(mjStartRound(state, seeded(13)).ok, true)
+  driveMahjongBots(state)
+  assert.equal(state.players.reduce((sum, player) => sum + (state.points[player.node] ?? 0), 0), 75000)
 })

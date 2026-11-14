@@ -245,7 +245,7 @@ window.__ModuleLoader__.load({
       botCountN: '{n} 个',
       autoFillBots: '自动补齐',
       autoFillBotsHint: '开启后按玩法推荐人数补满',
-      botCountHint: '按玩法推荐人数自动补齐（斗地主/跑得快 3 人、掼蛋/炸金花/德州 4 人、21 点 4 人）；21 点基本策略（<17 要牌、≥17 停牌）；后加入的真人会顶掉机器人；日麻暂不支持。',
+      botCountHint: '按玩法推荐人数自动补齐（斗地主/跑得快 3 人、掼蛋/炸金花/德州 4 人、21 点 4 人、日麻四人 4 人 / 日麻三人 3 人）；21 点基本策略（<17 要牌、≥17 停牌）；日麻为简单陪练（自动摸切/立直/和了，不鸣牌）；后加入的真人会顶掉机器人。',
       noPlayersCard: '人数不足：斗地主/跑得快需要 3 人',
       botTag: '🤖 机器人',
       turnTimeout: '回合超时（秒）',
@@ -2672,6 +2672,10 @@ window.__ModuleLoader__.load({
         const tags = []
         if (seatWindText !== '') {
           tags.push(h('span', { key: 'wind', className: 'dsh-card-lan-tag is-mj-wind' }, seatWindText))
+        }
+        // v17: Mahjong bot seats carry the same 🤖 label as the card games.
+        if (slot.bot === true) {
+          tags.push(h('span', { key: 'bot', className: 'dsh-card-lan-bot-tag', title: zh.botTag }, zh.botTag))
         }
         tags.push(h('span', { key: 'count', className: 'dsh-card-lan-tag' }, fmt(zh.mjHandCount, { n: handCount })))
         if (seatTenpai !== null && phase === 'result') {
