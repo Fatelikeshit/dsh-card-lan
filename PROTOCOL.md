@@ -695,6 +695,13 @@ window.__ModuleLoader__.load({
   - UI：21 点玩家行显示「🤖 机器人」标签；大厅提示补充「21 点 4 人、基本策略」。
 - **日麻简单陪练（v17）**：日麻·四人/三人可补机器人（推荐 4/3）：摸牌后若自摸可和则 `tsumo`；立直中/无和自动摸切；否则弃最孤张（字牌、幺九优先，其次孤立数牌）；弃牌后听牌且门清、点数≥1000 时先 `riichi`；呼叫窗口一律 `pass`，能荣和且未振听时 `ron`；3 人模式手牌有北自动 `nuki`。机器人不鸣牌、不做牌效，目标为「能凑局陪练」。
 
+### 7.28 日麻牌面图形与风格（v18.0）
+
+- 新增 `config.mjTileFace`：`"graphic" | "text"`（默认 `graphic`）；图形模式使用内嵌的 38 张矢量 SVG（34 牌面 + 3 赤宝 + 牌背），未知牌码回退文字。
+- 新增 `config.mjTileStyle`：`"dark" | "ivory" | "auto"`（默认 `dark`）：深色/象牙白两套自绘牌面；`auto` 跟随 DSH 主题——优先读 `document.body[data-ds-dark-theme]`，其次 `documentElement.dataset.dsThemeSource`（light/dark/system），再退回 `prefers-color-scheme` 与背景亮度判断。
+- 设置在「设置」页签即时生效（PATCH `/api/card-lan/config`），不占用牌桌浮层；只影响日麻，其它玩法不受影响。
+- 错误码：`invalid-mjtileface`、`invalid-mjtilestyle`。
+
 ## 8. 验收补充（v4）
 
 - `node --check` 两个半边通过。
