@@ -702,6 +702,21 @@ window.__ModuleLoader__.load({
 - 设置在「设置」页签即时生效（PATCH `/api/card-lan/config`），不占用牌桌浮层；只影响日麻，其它玩法不受影响。
 - 错误码：`invalid-mjtileface`、`invalid-mjtilestyle`。
 
+### 7.29 和牌/立直交互细化（v19.0）
+
+- 快照新增：
+  - `canTsumo`（bool）：仅自己回合、手牌 14 张、`isWinningShape` 且 `computeWin` 非 null/非 noYaku 时为 true；UI 只在 `canTsumo=true` 时显示「自摸」按钮。
+  - `riichiTiles`（数组，去重）：仅 `canRiichi=true` 时给出——打出后仍保持听牌的那几张牌（即可以用于立直宣言的弃牌）；其它情况为空数组。
+- 动作扩展：`{type:"riichi", tile?}`：
+  - 带 `tile`：服务端校验该牌在手中且打出后听牌，然后**原子完成**「扣 1000 立直棒 → 立直 → 打出该牌 → 打开呼叫窗口」，一次 action 搞定；
+  - 不带 `tile`：保留旧的两步流程（先宣言，再另行弃牌并校验听牌）；
+  - 非法牌返回 `bad-riichi`。
+- UI：
+  - 「自摸」按钮仅在 `view.canTsumo === true` 时显示（不再根据本地猜测）；
+  - 立直：手里 `riichiTiles` 内的牌在选中时高亮；未选中可立直的牌时「立直」按钮置灰不可点；选中后点击「立直」= 立直并打出该牌；
+  - 荣和按钮继续严格按 `pending.allowed` 是否包含 `ron` 显示。
+- 机器人兼容：日麻 bot 仍可用无 tile 的两步立直流程（引擎两种都支持）。
+
 ## 8. 验收补充（v4）
 
 - `node --check` 两个半边通过。

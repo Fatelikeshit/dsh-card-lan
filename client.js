@@ -659,6 +659,7 @@ window.__ModuleLoader__.load({
       mjPoints: '点数',
       mjPointValue: '{n} 点',
       mjRiichi: '立直',
+      mjRiichiSelect: '请选择一张可立直的牌（绿框）',
       mjRiichiDone: '已立直',
       mjRiichiAuto: '立直中：自动摸切',
       mjRiichiSticks: '立直棒 {n}',
@@ -2464,12 +2465,13 @@ function overlaySizeOf(config) {
     }
 
     /** One Mahjong text tile; `small` is the river size, `onClick` selects. */
-    function mahjongTileNode(tile, key, selected, onClick, small) {
+    function mahjongTileNode(tile, key, selected, onClick, small, extraClass) {
       const face = readMahjongTile(tile)
       const classes = ['dsh-card-lan-mj-tile']
       if (small === true) classes.push('is-small')
       if (face.tone !== '') classes.push('is-' + face.tone)
       if (selected === true) classes.push('is-selected')
+      if (typeof extraClass === 'string' && extraClass !== '') classes.push(extraClass)
       const props = {
         key,
         className: classes.join(' '),
@@ -2536,6 +2538,11 @@ function overlaySizeOf(config) {
       const lastDiscardFrom = lastDiscard !== null ? asString(lastDiscard.node, '') : ''
       const myFuriten = props.myFuriten === true
       const serverCanRiichi = props.canRiichi === true
+      // v19: server-computed tsumo availability and riichi discard candidates.
+      const serverCanTsumo = typeof props.canTsumo === 'boolean' ? props.canTsumo : null
+      const riichiTiles = Array.isArray(props.riichiTiles)
+        ? asArray(props.riichiTiles).filter((tile) => typeof tile === 'string' && tile !== '')
+        : null
       const mustDiscard = props.mustDiscard === true
       const chiOptions = asArray(props.chiOptions)
         .map((option) => asArray(option).filter((tile) => typeof tile === 'string' && tile !== ''))
@@ -2918,13 +2925,18 @@ function overlaySizeOf(config) {
             : null,
           myTurn ? h('span', { key: 'turn', className: 'dsh-card-lan-tag is-turn' }, zh.mjHintYourTurn) : null,
         ]
-        const handNodes = myHand.map((tile, index) => mahjongTileNode(
-          tile,
-          'hand:' + index + ':' + tile,
-          selectedIndexes.indexOf(index) !== -1,
-          canSelect ? () => props.toggleCard(index) : null,
-          false,
-        ))
+        const handNodes = myHand.map((tile, index) => {
+          const isSelected = selectedIndexes.indexOf(index) !== -1
+          const canRiichiDeclare = riichiTiles !== null && riichiTiles.indexOf(tile) !== -1
+          return mahjongTileNode(
+            tile,
+            'hand:' + index + ':' + tile,
+            isSelected,
+            canSelect ? () => props.toggleCard(index) : null,
+            false,
+            canRiichiDeclare ? (isSelected ? 'is-riichi-ready' : 'is-riichi-candidate') : '',
+          )
+        })
         bodyNodes.push(h('div', { key: 'myHand', className: 'dsh-card-lan-mj-hand-area' }, [
           h('div', { key: 'head', className: 'dsh-card-lan-row-head' }, handHead),
           (() => {
@@ -3221,12 +3233,19 @@ function overlaySizeOf(config) {
       }
       if (myTurn) {
         if (canRiichi) {
+          // v19: with server-provided riichiTiles the button is atomic
+          // (riichi + discard) and requires a highlighted eligible tile.
+          const atomicRiichi = riichiTiles !== null
+          const selectedEligible = atomicRiichi
+            ? selectedTile !== '' && riichiTiles.indexOf(selectedTile) !== -1
+            : true
           actionNodes.push(h('button', {
             key: 'riichi',
             type: 'button',
             className: 'dsh-card-lan-button dsh-card-lan-button-primary',
-            disabled: busy || connectionBroken,
-            onClick: () => void props.riichiCall(),
+            disabled: busy || connectionBroken || (atomicRiichi && !selectedEligible),
+            title: atomicRiichi && !selectedEligible ? zh.mjRiichiSelect : undefined,
+            onClick: () => void props.riichiCall(atomicRiichi ? selectedTile : undefined),
           }, zh.mjRiichi))
         }
         // After riichi the engine forces discarding the drawn tile; when the view
@@ -3251,13 +3270,15 @@ function overlaySizeOf(config) {
               onClick: () => void props.nukiTile(),
             }, zh.mjNukiBtn))
           }
-          actionNodes.push(h('button', {
-            key: 'tsumo',
-            type: 'button',
-            className: 'dsh-card-lan-button',
-            disabled: busy || connectionBroken,
-            onClick: () => void props.tsumoWin(),
-          }, zh.mjTsumo))
+          if (serverCanTsumo === null || serverCanTsumo === true) {
+            actionNodes.push(h('button', {
+              key: 'tsumo',
+              type: 'button',
+              className: 'dsh-card-lan-button',
+              disabled: busy || connectionBroken,
+              onClick: () => void props.tsumoWin(),
+            }, zh.mjTsumo))
+          }
           // Riichi forbids kans (M3 simplification).
           if (!myRiichi) {
             for (let index = 0; index < ankanOptions.length; index += 1) {
@@ -4660,7 +4681,13 @@ function overlaySizeOf(config) {
       const checkBet = () => act({ type: 'check' })
 
       /** Mahjong milestone ③: declare riichi (PROTOCOL §7.22). */
-      const riichiCall = () => void act({ type: 'riichi' })
+      // v19: atomic riichi may carry the tile to discard; the two-step old flow
+      // is kept when the server-provided riichiTiles are absent.
+      const riichiCall = (tile) => {
+        const value = asString(tile, '')
+        if (value !== '') void act({ type: 'riichi', tile: value })
+        else void act({ type: 'riichi' })
+      }
 
       /** Guandan tribute-return write (PROTOCOL §7.12, v10). */
       const submitTribute = (card) => {
@@ -5069,6 +5096,11 @@ function overlaySizeOf(config) {
           || mjPick('repeated', false) === true
           || (Number.isInteger(mjPick('honba', 0)) && mjPick('honba', 0) > 0)
           || (Number.isInteger(mjPick('dealerRepeatCount', 0)) && mjPick('dealerRepeatCount', 0) > 0))
+      // v19: server-computed tsumo availability / riichi discard candidates.
+      const mjCanTsumo = isMahjong && typeof table.canTsumo === 'boolean' ? table.canTsumo : null
+      const mjRiichiTiles = isMahjong && Array.isArray(table.riichiTiles)
+        ? table.riichiTiles.filter((tile) => typeof tile === 'string' && tile !== '')
+        : null
       const mahjongGame = isMahjong
         ? buildMahjongContent({
           game,
@@ -5093,6 +5125,8 @@ function overlaySizeOf(config) {
           myFuriten: mjMyFuriten,
           mustDiscard: mjMustDiscard,
           canRiichi: table.canRiichi === true,
+          canTsumo: mjCanTsumo,
+          riichiTiles: mjRiichiTiles,
           meldsFor: mahjongMeldsFor,
           points: mjPoints,
           riichiMap: mjRiichiMap,
@@ -5696,6 +5730,10 @@ function overlaySizeOf(config) {
       '.dsh-card-lan-mj-tile[role="button"]:hover{transform:translateY(-3px)}',
       '.dsh-card-lan-mj-tile.is-selected{transform:translateY(-6px);border-color:var(--dsw-alias-brand-primary,#4d6bfe);',
       'box-shadow:0 4px 12px rgba(77,107,254,.35),inset 0 0 0 1px rgba(77,107,254,.4)}',
+      // v19: tiles that may be discarded for a riichi declaration.
+      '.dsh-card-lan-mj-tile.is-riichi-candidate{border-color:rgba(74,222,128,.55)}',
+      '.dsh-card-lan-mj-tile.is-riichi-ready{border-color:#4ade80;',
+      'box-shadow:0 4px 12px rgba(74,222,128,.4),inset 0 0 0 1px rgba(74,222,128,.55)}',
       '.dsh-card-lan-mj-hand-area{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border-radius:10px;',
       'background:var(--dsw-alias-bg-layer-1,rgba(15,23,42,.45));border:1px solid var(--dsw-alias-border-l1,rgba(148,163,184,.2))}',
       '.dsh-card-lan-mj-hand{display:flex;flex-wrap:wrap;gap:4px;align-items:flex-end;padding:2px 0;min-height:50px}',
