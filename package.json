@@ -2,7 +2,7 @@
   "name": "dsh-card-lan",
   "version": "0.20.0",
   "private": true,
-  "description": "局域网牌桌：21 点 / 斗地主 / 跑得快，UDP 房间发现 + 房主权威牌局，支持密码/观战/掉线重连。",
+  "description": "局域网棋牌桌：21 点 / 斗地主 / 跑得快 / 掼蛋 / 炸金花 / 德州 / 日麻（四人·三人），UDP 房间发现 + 房主权威牌局，支持密码/观战/人机补位/掉线重连。",
   "icon": "icon.svg",
   "type": "module",
   "main": "lib/index.js",
