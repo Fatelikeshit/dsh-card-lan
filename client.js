@@ -681,6 +681,7 @@ window.__ModuleLoader__.load({
       mjDeltaLine: '{name} {delta}',
       mjRoundDealer: '東 {n} 局 · 庄家 {name}',
       mjDealerName: '庄家 {name}',
+      mjHonba: '{n} 本场',
       mjDealerRepeat: '连庄',
       mjMatchOver: '东风战结束',
       mjNewMatch: '开始新东风战',
@@ -2526,6 +2527,8 @@ function overlaySizeOf(config) {
       const turnNick = asString(props.turnNick, '')
       const myHand = asArray(props.myHand).filter((tile) => typeof tile === 'string' && tile !== '')
       const round = Math.max(0, asNumber(props.round, 0))
+      // v20: honba (repeat counter) is appended to the round label when > 0.
+      const honba = Math.max(0, asNumber(props.honba, 0))
       const dealerNode = asString(props.dealerNode, '')
       const wall = Math.max(0, asNumber(props.wall, 0))
       const nuki = Math.max(0, asNumber(props.nuki, 0))
@@ -2738,9 +2741,10 @@ function overlaySizeOf(config) {
       const headExtras = [
         h('span', { key: 'game', className: 'dsh-card-lan-pill is-game-' + game }, GAME_LABELS[game]),
         h('span', { key: 'round', className: 'dsh-card-lan-tag is-mj-round' },
-          roundLabel !== ''
+          (roundLabel !== ''
             ? roundLabel + ' · ' + fmt(zh.mjDealerName, { name: dealerNick })
-            : fmt(zh.mjRoundDealer, { n: Math.max(1, round), name: dealerNick })),
+            : fmt(zh.mjRoundDealer, { n: Math.max(1, round), name: dealerNick }))
+          + (honba > 0 ? ' · ' + fmt(zh.mjHonba, { n: honba }) : '')),
       ]
       if (dealerRepeat) {
         headExtras.push(h('span', { key: 'repeat', className: 'dsh-card-lan-tag is-mj-repeat' }, zh.mjDealerRepeat))
@@ -5101,6 +5105,7 @@ function overlaySizeOf(config) {
       const mjRiichiTiles = isMahjong && Array.isArray(table.riichiTiles)
         ? table.riichiTiles.filter((tile) => typeof tile === 'string' && tile !== '')
         : null
+      const mjHonba = isMahjong && Number.isInteger(table.honba) && table.honba > 0 ? table.honba : 0
       const mahjongGame = isMahjong
         ? buildMahjongContent({
           game,
@@ -5147,6 +5152,7 @@ function overlaySizeOf(config) {
           matchOver: mjMatchOver,
           finalPoints: mjFinalPoints,
           roundLabel: mjRoundLabel,
+          honba: mjHonba,
           dealerRepeat: mjDealerRepeat,
           riichiCall,
           result: asString(table.result, ''),

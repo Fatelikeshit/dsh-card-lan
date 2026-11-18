@@ -282,3 +282,29 @@ test('mahjong bots handle the three-player mode with north peeling', () => {
   driveMahjongBots(state)
   assert.equal(state.players.reduce((sum, player) => sum + (state.points[player.node] ?? 0), 0), 75000)
 })
+
+test('guandan bots resolve the tribute phase after the first round', () => {
+  const state = gdCreateTable(seatsN(4))
+  assert.equal(gdStartRound(state, seeded(5)).ok, true)
+  let guard = 0
+  while (state.phase !== 'result' && guard < 4000) {
+    guard += 1
+    const node = state.turn
+    const action = gdBotAction(state, node) ?? gdOnTimeout(state, node)
+    assert.ok(action !== null)
+    assert.equal(applyGd(state, node, action).ok, true)
+  }
+  assert.equal(state.phase, 'result')
+  assert.equal(gdStartRound(state, seeded(6)).ok, true)
+  let tributeGuard = 0
+  while (state.phase === 'tribute' && tributeGuard < 100) {
+    tributeGuard += 1
+    const node = state.turn
+    assert.ok(node)
+    const action = gdBotAction(state, node) ?? gdOnTimeout(state, node)
+    assert.ok(action !== null)
+    assert.equal(action.type, 'tribute-return')
+    assert.equal(applyGd(state, node, action).ok, true)
+  }
+  assert.equal(state.phase, 'playing')
+})
