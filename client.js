@@ -368,6 +368,8 @@ window.__ModuleLoader__.load({
       dragHint: '拖动标题栏可以移动浮层；快捷键 Ctrl+Shift+H 隐藏/显示浮层。',
       save: '保存',
       saved: '已保存，联机设置立即生效。',
+      enabledOn: '已开启局域网联机',
+      enabledOff: '已关闭局域网联机',
       saveFailed: '保存失败',
       refresh: '刷新',
       udpOnline: 'UDP 已监听',
@@ -3567,6 +3569,16 @@ function overlaySizeOf(config) {
         })
       }
 
+      // The LAN switch is a runtime toggle (PROTOCOL 3.2): apply it immediately
+      // instead of waiting for the 保存 button, and roll back on a failed PATCH.
+      const changeEnabled = (checked) => {
+        const value = checked === true
+        setForm((current) => (current === null ? current : { ...current, enabled: value }))
+        void applyDisplay({ enabled: value }, value ? zh.enabledOn : zh.enabledOff).then((saved) => {
+          if (!saved) setForm((current) => (current === null ? current : { ...current, enabled: !value }))
+        })
+      }
+
       const changeAutoFade = (checked) => {
         const value = checked === true
         setAutoFadeDraft(value)
@@ -3763,9 +3775,7 @@ function overlaySizeOf(config) {
             type: 'checkbox',
             checked: form !== null && form.enabled === true,
             disabled: form === null || busy,
-            onChange: (event) => setForm((current) => (
-              current === null ? current : { ...current, enabled: event.target.checked }
-            )),
+            onChange: (event) => changeEnabled(event.target.checked),
           }),
           h('span', { key: 'label' }, zh.enabled),
         ]),
